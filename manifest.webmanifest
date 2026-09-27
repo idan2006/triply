@@ -3,8 +3,8 @@
   "short_name": "Triply",
   "start_url": "./",
   "display": "standalone",
-  "background_color": "#fff8fb",
-  "theme_color": "#d94f86",
+  "background_color": "#FBF3F6",
+  "theme_color": "#CC2B66",
   "dir": "rtl",
   "lang": "he",
   "icons": []

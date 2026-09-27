@@ -54,7 +54,7 @@
     if (!Number.isFinite(d)) return { min: 25, mode: "transit", km: null };
     if (d < 0.08) return { min: 0, mode: "walk", km: d };
     const street = d * 1.3;
-    if (street <= 1.8)
+    if (street <= WALK_STREET_KM)
       return { min: Math.max(5, up5((street / 4.5) * 60)), mode: "walk", km: street };
     return {
       min: Math.min(100, up5(12 + (street / 17) * 60)),
@@ -63,6 +63,9 @@
     };
   }
 
+  // Up to ~2.3 km of streets (about 30 minutes) we walk; beyond that public transport.
+  const WALK_STREET_KM = 2.3;
+  const WALK_KM = WALK_STREET_KM / 1.3; // straight-line equivalent
   const PACE = {
     relaxed: { durMul: 1.15, rest: true, maxRest: 80 },
     balanced: { durMul: 1, rest: false, maxRest: 75 },
@@ -268,6 +271,7 @@
       dinner = f.dinnerDone,
       rest = !pace.rest,
       hard = 0,
+      transitTotal = 0,
       travelTotal = 0;
     const areaOf = (p) => (p && p.area ? ` באזור ${p.area}` : "");
     const add = (s, e, label, place, item) => {
@@ -294,6 +298,7 @@
       const tr = travel(pos, item);
       meals(item.dur, tr.min);
       if (tr.min > 0) {
+        if (tr.mode === "transit") (cost += tr.min * 1.5 + 15), (transitTotal += tr.min + 10);
         add(t, t + tr.min, `${tr.mode === "walk" ? "הליכה" : "נסיעה בתחבורה ציבורית"}${item.filler ? "" : " אל " + (item.nameHe || item.name)} (~${tr.min} דק')`);
         t += tr.min;
         travelTotal += tr.min;
@@ -336,6 +341,7 @@
       dinner = true;
     }
     if (home2.min > 0 && order.length) {
+      if (home2.mode === "transit") transitTotal += home2.min + 10;
       add(t, t + home2.min, `חזרה ללינה (${home2.mode === "walk" ? "הליכה" : "תחבורה ציבורית"} ~${home2.min} דק')`);
       t += home2.min;
       travelTotal += home2.min;
@@ -347,7 +353,7 @@
     if (needDinner && !dinner) (mealsOk = false), (cost += 300);
     cost += travelTotal;
     const fits = t <= f.windowEnd - f.minRest && hard === 0;
-    return { blocks, returnTime: t, cost, fits, mealsOk, travelTotal, order, hard };
+    return { blocks, returnTime: t, cost, fits, mealsOk, travelTotal, transitTotal, order, hard };
   }
 
   function permutations(arr) {
@@ -426,7 +432,7 @@
   }
 
   /* ---------- Main planner ---------- */
-  function plan(input) {
+  function planOnce(input, variant) {
     const pace = PACE[input.pace] || PACE.balanced;
     const list = dates(input.start, input.end);
     const frames = buildDayFrames(input, list, pace);
@@ -452,10 +458,12 @@
     const active = frames.filter((f) => capacity(f) >= 45);
     const sets = new Map(frames.map((f) => [f.date, []]));
 
-    // 1) Distribute must-sees geographically across active days.
+    // 1) Group must-sees into walkable areas, then pack whole areas into days so
+    //    each day covers one area (or two neighbouring ones) instead of zig-zagging.
     const fullDays = active.filter((f) => f.kind === "full");
     const mustDays = fullDays.length ? fullDays : active;
-    if (mustDays.length && must.length) {
+    // 1) Distribute must-sees geographically across active days.
+    if (variant.mode === "kmeans" && mustDays.length && must.length) {
       const k = Math.min(mustDays.length, must.length);
       const seeds = [must.reduce((a, b) => (km(home, b) > km(home, a) ? b : a))];
       while (seeds.length < k) {
@@ -501,6 +509,60 @@
           load.set(target.date, load.get(target.date) + m.dur + 30);
         }
       });
+    }
+
+    if (variant.mode === "group" && mustDays.length && must.length) {
+      // Agglomerative grouping: join groups whose closest members are walkable.
+      let groups = must.map((m) => [m]);
+      let merged = true;
+      while (merged) {
+        merged = false;
+        outer: for (let i = 0; i < groups.length; i++)
+          for (let j = i + 1; j < groups.length; j++) {
+            const link = Math.min(...groups[i].flatMap((x) => groups[j].map((y) => km(x, y) || 99)));
+            const diam = Math.max(...groups[i].concat(groups[j]).flatMap((x) => groups[i].concat(groups[j]).map((y) => km(x, y) || 0)));
+            if (link <= WALK_KM && diam <= 3.2) {
+              groups[i] = groups[i].concat(groups[j]);
+              groups.splice(j, 1);
+              merged = true;
+              break outer;
+            }
+          }
+      }
+      const loadOf = (items) => items.reduce((sum, x) => sum + x.dur + 25, 0);
+      groups.sort((x, y) => loadOf(y) - loadOf(x));
+      const load = new Map(frames.map((f) => [f.date, 0]));
+      const dayCentroid = (f) => (sets.get(f.date).length ? centroid(sets.get(f.date), home) : null);
+      const place = (item, f) => {
+        sets.get(f.date).push(item);
+        load.set(f.date, load.get(f.date) + item.dur + 25);
+      };
+      for (const g of groups) {
+        const gc = centroid(g, home);
+        const room = (f, extra) => capacity(f) - load.get(f.date) - extra;
+        const openAll = (f) => g.every((m) => openOn(m, f));
+        const need = loadOf(g);
+        // a) a day already working in a neighbouring area (one short hop away)
+        let target = mustDays
+          .filter((f) => dayCentroid(f) && openAll(f) && room(f, need + 40) >= 0 && km(dayCentroid(f), gc) <= variant.near)
+          .sort((x, y) => km(dayCentroid(x), gc) - km(dayCentroid(y), gc))[0];
+        // b) otherwise an empty day
+        if (!target) target = mustDays.filter((f) => !sets.get(f.date).length && openAll(f) && room(f, need) >= 0).sort((x, y) => capacity(y) - capacity(x))[0];
+        // c) otherwise the nearest day that still has room
+        if (!target) target = mustDays.filter((f) => openAll(f) && room(f, need + 40) >= 0).sort((x, y) => km(dayCentroid(x) || home, gc) - km(dayCentroid(y) || home, gc))[0];
+        if (target) {
+          g.forEach((m) => place(m, target));
+          continue;
+        }
+        // d) the area is bigger than a day: split it item by item across the nearest days
+        for (const m of g.slice().sort((x, y) => km(gc, x) - km(gc, y))) {
+          const f =
+            mustDays.filter((d) => openOn(m, d) && room(d, m.dur + 25) >= 0).sort((x, y) => km(dayCentroid(x) || gc, m) - km(dayCentroid(y) || gc, m))[0] ||
+            mustDays.filter((d) => openOn(m, d)).sort((x, y) => load.get(x.date) - capacity(x) - (load.get(y.date) - capacity(y)))[0] ||
+            mustDays[0];
+          place(m, f);
+        }
+      }
     }
 
     // 2) Make sure every day's must-sees fit; move the ones that do not.
@@ -558,19 +620,24 @@
       }
     }
 
-    // 3) Fill days round-robin from the AI pool (one place per day per round, so
-    //    no day is left empty when the pool is small), preferring nearby places.
+    // 3) Fill each day from places within WALKING distance of what it already has.
+    //    Public transport is used only to reach a new area; a day grows around
+    //    its area instead of hopping across the city.
     const underfilled = (f) => {
       const r = results.get(f.date);
       return r.fits && (f.windowEnd - r.returnTime > f.maxRest || !r.mealsOk);
     };
-    // Seed empty full days with well-separated, highly ranked anchors.
+    const nearest = (set, c, fallback) => (set.length ? Math.min(...set.map((x) => (Number.isFinite(km(x, c)) ? km(x, c) : 99))) : Number.isFinite(km(fallback, c)) ? km(fallback, c) : 99);
+    const density = (c) => pool.filter((o) => o !== c && !used.has(o) && km(o, c) <= WALK_KM).length;
+    // Seed empty full days in the richest area that no other day covers yet.
     for (const f of fillOrder.filter((d) => d.kind === "full" && !sets.get(d.date).length)) {
-      const taken = fillOrder.map((d) => sets.get(d.date)).filter((x) => x.length).map((x) => centroid(x, home));
+      const taken = fillOrder.map((d) => sets.get(d.date)).filter((x) => x.length);
       const options = pool
         .filter((c) => !used.has(c) && openOn(c, f) && c.bestTime !== "evening")
-        .slice(0, 12)
-        .map((c) => ({ c, score: c.rank * 0.4 - Math.min(6, taken.length ? Math.min(...taken.map((t) => km(t, c) || 0)) : 0) }))
+        .map((c) => {
+          const closest = taken.length ? Math.min(...taken.map((set) => nearest(set, c, home))) : 99;
+          return { c, score: c.rank * 0.3 - density(c) * 1.2 + (closest < 2 * WALK_KM ? 6 : 0) };
+        })
         .sort((x, y) => x.score - y.score);
       for (const { c } of options) {
         const s = bestInsertion(f, results.get(f.date).order, c, home, pace);
@@ -582,7 +649,8 @@
         }
       }
     }
-    for (let round = 0; round < 14; round++) {
+    const fillRounds = () => {
+    for (let round = 0; round < 20; round++) {
       let changed = false;
       const dayOrder = fillOrder
         .filter(underfilled)
@@ -590,25 +658,27 @@
       for (const f of dayOrder) {
         const best = results.get(f.date);
         const set = sets.get(f.date);
-        const anchor = set.length ? centroid(set, home) : home;
+        const gap = f.windowEnd - best.returnTime;
         const late = best.returnTime >= 17 * 60;
-        const others = dayOrder.filter((o) => o !== f && sets.get(o.date).length).map((o) => centroid(sets.get(o.date), home));
-        const candidates = pool
+        const otherSets = dayOrder.filter((o) => o !== f && sets.get(o.date).length).map((o) => sets.get(o.date));
+        const scored = pool
           .filter((c) => !used.has(c) && openOn(c, f))
           .map((c) => {
-            const d = km(anchor, c);
-            const own = Number.isFinite(d) ? d : 8;
-            const elsewhere = others.length ? Math.min(...others.map((o) => km(o, c) || 99)) : 99;
-            let score = own + c.rank * (set.length ? 0.2 : 0.6) + 0.8 * Math.max(0, own - elsewhere);
-            if (late && c.bestTime === "evening") score -= 2;
-            if (late && (c.openTo === null || c.openTo >= 21 * 60 + 30)) score -= 1.5;
-            if (!late && c.openTo === null && c.bestTime !== "morning") score += 0.8;
+            const nd = nearest(set, c, home);
+            const elsewhere = otherSets.length ? Math.min(...otherSets.map((o) => nearest(o, c, home))) : 99;
+            let score = nd * 1.2 + c.rank * 0.12;
+            if (elsewhere + 0.3 < nd) score += 1.5; // another day is right next to it
+            if (late && c.bestTime === "evening") score -= 1.2;
+            if (late && (c.openTo === null || c.openTo >= 21 * 60 + 30)) score -= 0.8;
+            if (!late && c.openTo === null && c.bestTime !== "morning") score += 0.4;
             if (!late && c.bestTime === "evening" && !set.length) score += 3;
-            if (f.kind !== "full") score += (km(home, c) || 0) * 0.5;
-            return { c, score };
-          })
-          .sort((x, y) => x.score - y.score)
-          .slice(0, 8);
+            return { c, nd, score };
+          });
+        // Walkable places first; a new area only when the day still has a big hole.
+        let tier = scored.filter((x) => x.nd <= WALK_KM);
+        if (!tier.length && gap >= 120) tier = scored.filter((x) => x.nd <= 3.5);
+        if (!tier.length && gap >= 180 && set.length < 2) tier = scored;
+        const candidates = tier.sort((x, y) => x.score - y.score).slice(0, 8);
         let pick = null;
         for (const { c } of candidates) {
           const s = bestInsertion(f, best.order, c, home, pace);
@@ -628,6 +698,70 @@
       }
       if (!changed) break;
     }
+    };
+    fillRounds();
+
+    // 3b) Local improvement: move or swap optional places between days when that
+    //     cuts public-transport time (must-sees can move too, never get dropped), then refill the freed time with walkable places.
+    const dayCost = (r) => r.transitTotal + (r.fits ? 0 : 10000);
+    for (let pass = 0; pass < 3; pass++) {
+      let improved = false;
+      for (const A of fillOrder)
+        for (const B of fillOrder) {
+          if (A === B) continue;
+          const rA = results.get(A.date),
+            rB = results.get(B.date);
+          for (const item of rA.order.filter((x) => !x.filler)) {
+            if (!openOn(item, B)) continue;
+            const before = dayCost(rA) + dayCost(rB);
+            const newA = simulate(A, rA.order.filter((x) => x !== item), home, pace);
+            // move
+            const movedB = bestInsertion(B, rB.order, item, home, pace);
+            if (newA.fits && movedB.fits && dayCost(newA) + dayCost(movedB) + 10 < before) {
+              results.set(A.date, newA);
+              results.set(B.date, movedB);
+              sets.set(A.date, newA.order.slice());
+              sets.set(B.date, movedB.order.slice());
+              improved = true;
+              break;
+            }
+            // move a must-see into B by dropping one optional place of B back to the pool
+            if (item.mustSee && newA.fits) {
+              let ejected = false;
+              for (const drop of rB.order.filter((x) => !x.mustSee && !x.filler)) {
+                const sB = bestInsertion(B, rB.order.filter((x) => x !== drop), item, home, pace);
+                if (sB.fits && dayCost(newA) + dayCost(sB) + 10 < before) {
+                  used.delete(drop);
+                  results.set(A.date, newA);
+                  results.set(B.date, sB);
+                  sets.set(A.date, newA.order.slice());
+                  sets.set(B.date, sB.order.slice());
+                  ejected = improved = true;
+                  break;
+                }
+              }
+              if (ejected) break;
+            }
+            // swap with an optional place of B
+            let swapped = false;
+            for (const other of rB.order.filter((x) => !x.filler && openOn(x, A))) {
+              const sA = bestInsertion(A, rA.order.filter((x) => x !== item), other, home, pace);
+              const sB = bestInsertion(B, rB.order.filter((x) => x !== other), item, home, pace);
+              if (sA.fits && sB.fits && dayCost(sA) + dayCost(sB) + 10 < before) {
+                results.set(A.date, sA);
+                results.set(B.date, sB);
+                sets.set(A.date, sA.order.slice());
+                sets.set(B.date, sB.order.slice());
+                swapped = improved = true;
+                break;
+              }
+            }
+            if (swapped) break;
+          }
+        }
+      if (!improved) break;
+    }
+    fillRounds();
 
     // 4) Absorb leftover evening time by lengthening visits (never leave a long empty block).
     for (const f of fillOrder) {
@@ -653,7 +787,7 @@
         const at = last || home;
         const area = last?.area || "";
         const dur = Math.min(90, Math.max(30, round15(f.windowEnd - best.returnTime - Math.max(f.minRest, f.maxRest - 30))));
-        const filler = { filler: true, name: "", nameHe: "", label: dur <= 45 ? `קינוח ושיטוט ערב קצר${area ? " באזור " + area : " ליד הלינה"}` : `זמן חופשי לשיטוט, קניות ובתי קפה${area ? " באזור " + area : " ליד הלינה"}`, lat: at.lat, lng: at.lng, area, dur, baseDur: dur, openFrom: null, openTo: null, closedDays: [], bestTime: "any", flexible: false, mustSee: false, rank: 999 };
+        const filler = { filler: true, name: "", nameHe: "", label: dur <= 45 ? `${best.returnTime >= 18 * 60 ? "קינוח ושיטוט ערב קצר" : "הפסקת קפה ושיטוט קצר"}${area ? " באזור " + area : " ליד הלינה"}` : `סיור רגלי חופשי — רחובות, חנויות ובתי קפה${area ? " באזור " + area : " ליד הלינה"}`, lat: at.lat, lng: at.lng, area, dur, baseDur: dur, openFrom: null, openTo: null, closedDays: [], bestTime: "any", flexible: false, mustSee: false, rank: 999 };
         let s2 = simulate(f, [...best.order, filler], home, pace);
         while (!s2.fits && filler.dur > 30) {
           filler.dur -= 15;
@@ -728,6 +862,39 @@
     });
     const unused = pool.filter((p) => !used.has(p)).slice(0, 15).map((p) => p.nameHe || p.name);
     return { dailySchedule, stops, warnings, unused };
+  }
+
+  /* Try several ways of grouping the must-see places into days and keep the
+   * plan with the least time on public transport (then the most attractions). */
+  const VARIANTS = [
+    { mode: "group", near: 3.5 },
+    { mode: "group", near: 2.5 },
+    { mode: "group", near: 5 },
+    { mode: "kmeans" },
+  ];
+  function scorePlan(result, input) {
+    let transit = 0,
+      free = 0,
+      places = 0;
+    for (const d of result.dailySchedule)
+      for (const b of d.blocks) {
+        const m = toMin(b.endTime) - toMin(b.startTime);
+        if (/תחבורה ציבורית/.test(b.activity)) transit += m + 10;
+        if (/סיור רגלי חופשי|קינוח ושיטוט|הפסקת קפה ושיטוט/.test(b.activity)) free += m;
+        if (b.placeName) places++;
+      }
+    const mustNames = (input.attractions || []).filter((a) => a && a.mustSee).length;
+    const placedMust = result.stops.filter((x) => x.mustSee).length;
+    return transit + free * 0.6 - places * 12 + (mustNames - placedMust) * 1000;
+  }
+  function plan(input) {
+    let best = null;
+    for (const variant of VARIANTS) {
+      const result = planOnce(structuredClone(input), variant);
+      result.score = scorePlan(result, input);
+      if (!best || result.score < best.score) best = result;
+    }
+    return best;
   }
 
   /* Validate a produced schedule the same way the app does (no gaps, no overlaps). */

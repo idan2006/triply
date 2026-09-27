@@ -49,7 +49,7 @@
       '<section class="wizard-stage" id="wizardStage1"><h3>איך תרצה להתחיל?</h3><p class="wizard-hint">בחר אפשרות אחת: סריקת מסמכים או מילוי הפרטים בעצמך.</p><div class="source-choice-grid">'+
       '<button type="button" class="source-choice" data-source="documents" aria-pressed="false"><span class="source-choice-icon">✈️</span><b>שליחת קבצים</b><small>ה-AI יחלץ יעד, תאריכים, מלון ופרטי טיסה</small></button>'+
       '<button type="button" class="source-choice" data-source="manual" aria-pressed="false"><span class="source-choice-icon">✍️</span><b>מילוי נתונים</b><small>ממלאים את פרטי הטיול באופן ידני</small></button></div><p id="sourceError" class="wizard-error" role="alert"></p></section>'+
-      '<section class="wizard-stage" id="wizardStage2" hidden><h3>פרטי הטיול</h3><div id="documentPane"><p class="wizard-hint">הקבצים נשלחים ל-Google לצורך סריקה בלבד ואינם נשמרים באפליקציה.</p><div class="field"><label for="tripDocuments">בחר עד שני קובצי PDF או תמונות, עד 4MB לקובץ</label><input id="tripDocuments" type="file" accept="application/pdf,image/jpeg,image/png,image/webp" multiple></div><button type="button" class="secondary-btn" id="scanTripDocs">סריקה ומילוי אוטומטי</button><p id="documentStatus" role="status"></p><div id="documentResults"></div></div>'+
+      '<section class="wizard-stage" id="wizardStage2" hidden><h3>פרטי הטיול</h3><div id="documentPane"><p class="wizard-hint">לא חובה. העלה כרטיסי טיסה ואישורי מלון (כמה שצריך — גם טיול עם כמה טיסות ומלונות). כל קובץ נסרק לבד וממלא את הפרטים למטה. הקבצים נשלחים ל-Google לסריקה בלבד ולא נשמרים.</p><div class="doc-group"><h4>✈️ כרטיסי טיסה</h4><div id="flightSlots"></div></div><div class="doc-group"><h4>🏨 אישורי מלון</h4><div id="hotelSlots"></div></div><p id="documentStatus" role="status"></p><div id="documentResults"></div></div>'+
       '<div id="tripDetailsFields"><div class="field"><label for="newCity">יעד</label><input id="newCity" maxlength="150" value="'+escapeHTML(t&&t.city||'')+'" autocomplete="off" placeholder="למשל: לונדון"></div><div class="field-grid"><div class="field"><label for="newStart">מתאריך</label><input id="newStart" type="date" value="'+(t&&t.start||'')+'"></div><div class="field"><label for="newEnd">עד תאריך</label><input id="newEnd" type="date" value="'+(t&&t.end||'')+'"></div></div><div class="field"><label for="tripHotel">מלון או נקודת יציאה (לא חובה)</label><input id="tripHotel" value="'+escapeHTML(t&&t.hotel||'')+'" maxlength="250" placeholder="שם המלון או כתובת"></div></div></section>'+
       '<section class="wizard-stage" id="wizardStage3" hidden><h3>מי נוסע ומה התקציב?</h3><p class="wizard-hint">מגדירים תקציב אישי לכל אחד. הסכומים יכולים להיות שונים.</p><div class="field"><label for="newPeople">מספר נוסעים</label><input id="newPeople" type="number" inputmode="numeric" min="1" max="1000" step="1" value="'+(t&&t.people||1)+'" '+(locked?'disabled':'')+'></div>'+
       (locked?'<small>מספר המשתתפים נעול לאחר רישום הוצאות כדי לשמור על החלוקה שלהן.</small>':'')+
@@ -68,7 +68,7 @@
       $('#wizardNext').hidden=step===4;$('#wizardSave').hidden=step!==4;
       $('#wizardNext').textContent=step===1?'המשך לפרטי הטיול':'המשך';
       $('#documentPane').hidden=mode!=='documents';
-      $('#tripDetailsFields').hidden=mode==='documents'&&!scanned;
+      $('#tripDetailsFields').hidden=false;
       $('#prepaidSection').hidden=mode!=='documents'&&!t;
       $$('[data-source]').forEach(function(button){var selected=button.dataset.source===mode;button.classList.toggle('selected',selected);button.setAttribute('aria-pressed',String(selected));});
       renderPeople();showPrepaid();
@@ -76,7 +76,7 @@
     function chooseSource(nextMode){
       if(mode&&mode!==nextMode){
         scanned=false;scannedDetails={};prepaidRows=[];
-        $('#tripDocuments').value='';$('#newCity').value='';$('#newStart').value='';$('#newEnd').value='';$('#tripHotel').value='';
+        docs={flight:[],hotel:[]};dirty={};renderDocs();$('#newCity').value='';$('#newStart').value='';$('#newEnd').value='';$('#tripHotel').value='';
         $('#documentResults').replaceChildren();$('#documentStatus').textContent='';
       }
       mode=nextMode;$('#sourceError').textContent='';renderWizard();
@@ -89,13 +89,6 @@
     };
     $('#tripCurrency').onchange=function(){readPeople();renderPeople();};
     $('#newStart').onchange=function(){$('#newEnd').min=$('#newStart').value;};
-    $('#tripDocuments').onchange=function(){
-      if(!scanned)return;
-      scanned=false;scannedDetails={};prepaidRows=[];
-      $('#newCity').value='';$('#newStart').value='';$('#newEnd').value='';$('#tripHotel').value='';
-      $('#documentResults').replaceChildren();$('#documentStatus').textContent='נבחר קובץ חדש; יש לסרוק אותו לפני שממשיכים.';
-      renderWizard();
-    };
     $('#addPrepaid').onclick=function(){prepaidRows.push({name:'',amount:'',currency:''});showPrepaid();};
     $$('[data-activity]').forEach(function(input){input.onchange=function(){activityDraft=input.checked?Array.from(new Set(activityDraft.concat([input.dataset.activity]))):activityDraft.filter(function(value){return value!==input.dataset.activity;});};});
     $$('input[name="tripKind"]').forEach(function(input){input.onchange=function(){tripKind=input.value;};});
@@ -118,42 +111,90 @@
       try{
         $('#formError').textContent='';
         if(step===1&&!mode)throw Error('בחר אחת משתי האפשרויות כדי להמשיך');
-        if(step===2){if(mode==='documents'&&!scanned)throw Error('סרוק את הקבצים קודם, או חזור ובחר מילוי נתונים');checkTripDetails();}
+        if(step===2){if(docs.flight.concat(docs.hotel).some(function(d){return d.state==='busy';}))throw Error('רגע, עדיין סורק קובץ…');checkTripDetails();}
         if(step===3)checkPeople();
         step++;renderWizard();
       }catch(error){if(step===1)$('#sourceError').textContent=error.message;else $('#formError').textContent=error.message;}
     };
-    $('#scanTripDocs').onclick=async function(){
-      var files=Array.from($('#tripDocuments').files),status=$('#documentStatus'),button=$('#scanTripDocs');
-      if(mode!=='documents'){status.textContent='בחר שליחת קבצים בשלב הראשון כדי לסרוק מסמכים.';return;}
-      if(!files.length||files.length>2){status.textContent='בחר קובץ אחד או שניים.';return;}
-      if(files.some(function(file){return file.size>4*1024*1024||!['application/pdf','image/jpeg','image/png','image/webp'].includes(file.type);})){status.textContent='אפשר לבחור PDF או תמונה עד 4MB לכל קובץ.';return;}
-      button.disabled=true;status.textContent='סורק ומחלץ את פרטי הטיול…';
+    /* ---- Travel documents: separate flight / hotel uploads, optional, unlimited files ---- */
+    var docs={flight:[],hotel:[]},docSeq=0,dirty={};
+    ['newCity','newStart','newEnd','tripHotel'].forEach(function(id){var el=$('#'+id);if(el)el.addEventListener('input',function(){dirty[id]=true;});});
+    function docLabel(kind,i){return (kind==='flight'?'כרטיס טיסה ':'אישור מלון ')+(i+1);}
+    function docSummary(d){
+      var x=d.result||{};
+      if(d.kind==='flight'){var f=x.flights||[];return f.length?f.map(function(s){return (s.from||s.fromAirport||'?')+' ← '+(s.to||s.toAirport||'?')+' · '+(s.date||'')+' '+(s.departTime||'')+(s.arriveTime?' (נחיתה '+s.arriveTime+')':'');}).join(' | '):'לא זוהו טיסות בקובץ';}
+      var h=x.hotels||[];return h.length?h.map(function(s){return (s.name||'מלון')+' · '+(s.checkIn||'?')+' עד '+(s.checkOut||'?');}).join(' | '):'לא זוהה מלון בקובץ';
+    }
+    function renderDocs(){
+      ['flight','hotel'].forEach(function(kind){
+        var host=$('#'+kind+'Slots');if(!host)return;
+        var list=docs[kind];
+        host.innerHTML=list.map(function(d,i){
+          return '<div class="doc-slot doc-'+d.state+'"><span class="doc-name">'+escapeHTML(docLabel(kind,i))+' · '+escapeHTML(d.fileName)+'</span>'+
+            '<span class="doc-state">'+(d.state==='busy'?'סורק…':d.state==='ok'?'✓ '+escapeHTML(docSummary(d)):'⚠ '+escapeHTML(d.error||'הסריקה נכשלה'))+'</span>'+
+            '<button type="button" class="small-btn" data-doc-remove="'+kind+':'+d.id+'" aria-label="הסרת הקובץ">×</button></div>';
+        }).join('')+
+        '<label class="doc-add"><input type="file" data-doc-kind="'+kind+'" accept="application/pdf,image/jpeg,image/png,image/webp"><span>'+(list.length?'＋ הוספת '+(kind==='flight'?'כרטיס טיסה נוסף':'אישור מלון נוסף'):'＋ העלאת '+(kind==='flight'?'כרטיס טיסה':'אישור מלון'))+'</span></label>';
+      });
+      $$('[data-doc-kind]').forEach(function(input){input.onchange=function(){var f=input.files&&input.files[0];if(f)scanDoc(input.dataset.docKind,f);};});
+      $$('[data-doc-remove]').forEach(function(b){b.onclick=function(){var p=b.dataset.docRemove.split(':');docs[p[0]]=docs[p[0]].filter(function(d){return String(d.id)!==p[1];});applyDocs();renderDocs();};});
+    }
+    async function scanDoc(kind,file){
+      var status=$('#documentStatus');
+      if(file.size>4*1024*1024||['application/pdf','image/jpeg','image/png','image/webp'].indexOf(file.type)<0){status.textContent='אפשר להעלות PDF או תמונה (JPG/PNG/WEBP) עד 4MB לקובץ.';renderDocs();return;}
+      var d={id:++docSeq,kind:kind,fileName:file.name.slice(0,60),state:'busy',result:null,error:''};
+      docs[kind].push(d);renderDocs();status.textContent='';
       try{
-        var encoded=await Promise.all(files.map(async function(file){var bytes=new Uint8Array(await file.arrayBuffer()),binary='';for(var i=0;i<bytes.length;i+=32768)binary+=String.fromCharCode.apply(null,bytes.subarray(i,i+32768));return {type:file.type,data:btoa(binary)};}));
-        var data=await aiCall('documents',{trip:{city:$('#newCity').value},files:encoded}),x=data.extracted||{},arrival=x.arrival||{},departure=x.departure||{};
-        scannedDetails=Object.assign({},scannedDetails,x,{arrival:arrival,departure:departure});
-        var destination=x.destination||x.city;if(destination)$('#newCity').value=destination;
-        if(x.start&&validISO(x.start))$('#newStart').value=x.start;else if(arrival.date&&validISO(arrival.date))$('#newStart').value=arrival.date;else if(x.hotelCheckIn&&validISO(x.hotelCheckIn))$('#newStart').value=x.hotelCheckIn;
-        if(x.end&&validISO(x.end))$('#newEnd').value=x.end;else if(x.hotelCheckOut&&validISO(x.hotelCheckOut))$('#newEnd').value=x.hotelCheckOut;else if(departure.date&&validISO(departure.date))$('#newEnd').value=departure.date;
-        if(x.people&&Number.isInteger(Number(x.people))&&Number(x.people)>0){var count=Math.min(1000,Number(x.people));while(peopleDraft.length<count)peopleDraft.push({name:'משתתף '+(peopleDraft.length+1),budget:''});peopleDraft=peopleDraft.slice(0,count);$('#newPeople').value=count;}
-        if(x.hotel)$('#tripHotel').value=x.hotel;
-        if(Array.isArray(x.prepaidExpenses)){
-          var seen=new Set(prepaidRows.map(function(row){return String(row.name).toLowerCase()+'|'+row.amount+'|'+row.currency;}));
-          x.prepaidExpenses.forEach(function(cost){var currency=String(cost.currency||'').toUpperCase(),row={name:String(cost.name||'').slice(0,120),amount:cost.amount==null?'':String(cost.amount),currency:currencies.includes(currency)?currency:''},key=row.name.toLowerCase()+'|'+row.amount+'|'+row.currency;if(row.name&&row.amount&&!seen.has(key)){prepaidRows.push(row);seen.add(key);}});
-        }
-        scanned=true;renderWizard();
-        $('#documentResults').innerHTML='<div class="document-result"><b>פרטים שחולצו — בדוק ותקן לפני השמירה</b><p>יעד: '+escapeHTML(destination||'לא זוהה')+'</p><p>תאריכים: '+escapeHTML($('#newStart').value||'לא זוהו')+' עד '+escapeHTML($('#newEnd').value||'לא זוהו')+'</p><p>נוסעים: '+escapeHTML(x.people||'לא זוהה')+'</p><p>מלון / נקודת התחלה: '+escapeHTML(x.hotel||'לא זוהה')+'</p><p>נחיתה: '+escapeHTML(arrival.date||'לא זוהה')+' '+escapeHTML(arrival.time||'')+' '+escapeHTML(arrival.airport||'')+'</p><p>המראה חזרה: '+escapeHTML(departure.date||'לא זוהה')+' '+escapeHTML(departure.time||'')+' '+escapeHTML(departure.airport||'')+'</p><small>'+escapeHTML(data.message||'')+'</small></div>';
-        status.textContent='הסריקה הושלמה. השלם כל פרט חסר; המסמכים עצמם לא נשמרים.';
-      }catch(error){status.textContent=error.message||'סריקת המסמכים נכשלה.';}
-      finally{button.disabled=false;}
-    };
+        var bytes=new Uint8Array(await file.arrayBuffer()),binary='';
+        for(var i=0;i<bytes.length;i+=32768)binary+=String.fromCharCode.apply(null,bytes.subarray(i,i+32768));
+        var data=await aiCall('scan',{kind:kind,file:{type:file.type,data:btoa(binary)}});
+        d.result=data.extracted||{};d.state='ok';
+      }catch(error){d.state='error';d.error=error.message||'הסריקה נכשלה';}
+      if(docs[kind].indexOf(d)>=0){applyDocs();renderDocs();}
+    }
+    function applyDocs(){
+      var legs=[],hotels=[],prepaid=[],people=0,dest='';
+      docs.flight.concat(docs.hotel).forEach(function(d){
+        if(d.state!=='ok')return;var x=d.result||{};
+        (x.flights||[]).forEach(function(f){legs.push(f);});
+        (x.hotels||[]).forEach(function(h){hotels.push(h);});
+        (x.prepaidExpenses||[]).forEach(function(p){prepaid.push({name:p.name,amount:p.amount==null?'':String(p.amount),currency:p.currency||'',docId:d.id});});
+        if(x.people>people)people=x.people;
+        if(!dest&&x.destination)dest=x.destination;
+      });
+      legs.sort(function(a,b){return (a.date+(a.departTime||'')).localeCompare(b.date+(b.departTime||''));});
+      hotels.sort(function(a,b){return String(a.checkIn).localeCompare(String(b.checkIn));});
+      var first=legs[0],last=legs.length>1?legs[legs.length-1]:null;
+      var arrival=first?{date:first.arriveDate||first.date,time:first.arriveTime||'',airport:first.toAirport||''}:(scannedDetails.arrival||{});
+      var departure=last?{date:last.date,time:last.departTime||'',airport:last.fromAirport||''}:(scannedDetails.departure||{});
+      if(!dest&&hotels[0]&&hotels[0].city)dest=hotels[0].city;if(!dest&&first&&first.to)dest=first.to;
+      var starts=[],ends=[];
+      if(first)starts.push(arrival.date);if(hotels[0]&&hotels[0].checkIn)starts.push(hotels[0].checkIn);
+      if(last)ends.push(departure.date);var lastHotel=hotels.slice().sort(function(a,b){return String(a.checkOut).localeCompare(String(b.checkOut));}).pop();if(lastHotel&&lastHotel.checkOut)ends.push(lastHotel.checkOut);
+      starts=starts.filter(validISO).sort();ends=ends.filter(validISO).sort();
+      scannedDetails=Object.assign({},scannedDetails,{arrival:first?arrival:scannedDetails.arrival,departure:last?departure:scannedDetails.departure,flights:legs,hotels:hotels,hotelCheckIn:hotels[0]?hotels[0].checkIn:scannedDetails.hotelCheckIn,hotelCheckOut:lastHotel?lastHotel.checkOut:scannedDetails.hotelCheckOut});
+      if(dest&&!dirty.newCity)$('#newCity').value=dest;
+      if(starts.length&&!dirty.newStart)$('#newStart').value=starts[0];
+      if(ends.length&&!dirty.newEnd)$('#newEnd').value=ends[ends.length-1];
+      if(hotels[0]&&hotels[0].name&&!dirty.tripHotel)$('#tripHotel').value=hotels[0].name+(hotels.length>1?' (+'+(hotels.length-1)+' מלונות נוספים)':'');
+      if(people&&!locked){readPeople();var count=Math.min(1000,people);while(peopleDraft.length<count)peopleDraft.push({name:'משתתף '+(peopleDraft.length+1),budget:''});peopleDraft=peopleDraft.slice(0,Math.max(count,peopleDraft.length));$('#newPeople').value=peopleDraft.length;}
+      prepaidRows=prepaidRows.filter(function(r){return !r.docId;}).concat(prepaid);
+      scanned=legs.length>0||hotels.length>0;
+      var parts=[];
+      if(first)parts.push('נחיתה: '+(arrival.date||'?')+' '+(arrival.time||''));
+      if(last)parts.push('המראה חזרה: '+(departure.date||'?')+' '+(departure.time||''));
+      if(legs.length>2)parts.push(legs.length+' טיסות בסך הכול');
+      if(hotels.length)parts.push(hotels.length===1?'מלון אחד':hotels.length+' מלונות');
+      $('#documentResults').innerHTML=parts.length?'<div class="document-result"><b>מה שמילאתי מהקבצים — אפשר לתקן למטה</b><p>'+escapeHTML(parts.join(' · '))+'</p></div>':'';
+      showPrepaid();
+    }
+    renderDocs();
     $('#tripForm').onsubmit=async function(event){
       event.preventDefault();var button=$('#wizardSave'),error=$('#formError');button.disabled=true;error.textContent='';
       try{
         checkTripDetails();
         if(!t&&mode!=='documents'&&mode!=='manual')throw Error('חזור ובחר שליחת קבצים או מילוי נתונים');
-        if(mode==='documents'&&!scanned)throw Error('סרוק את המסמכים לפני יצירת הטיול');
+        
         var people=checkPeople();
         if(!tripKind&&!t)throw Error('בחר את סוג הטיול');
         if(!activityDraft.length&&!t)throw Error('בחר לפחות סוג פעילות אחד');

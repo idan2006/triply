@@ -1,0 +1,11 @@
+{
+  "name": "Triply — תכנון טיולים",
+  "short_name": "Triply",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#fff8fb",
+  "theme_color": "#d94f86",
+  "dir": "rtl",
+  "lang": "he",
+  "icons": []
+}

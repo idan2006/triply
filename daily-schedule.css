@@ -1,0 +1,13 @@
+.full-day-schedule{margin-bottom:1.5rem;padding:1rem;border:1px solid #f4c5d8;border-radius:18px;background:#fff9fc}
+.full-day-heading{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.5rem}
+.full-day-heading>div{display:grid;gap:.2rem}.full-day-heading>span,.full-day-heading>div>span{font-size:.88rem;color:#665b63}
+.full-day-heading h4,.scheduled-stops-heading{margin:.25rem 0;color:#8b2854}
+.schedule-caveat{font-size:.82rem;color:#665b63}
+.schedule-warning{padding:.6rem .8rem;border-radius:10px;background:#fff0cc;color:#6c4b00}
+.schedule-blocks{list-style:none;padding:0;margin:1rem 0}
+.schedule-block{display:flex;align-items:center;gap:.8rem;padding:.6rem 0;border-top:1px solid #f7dce7}
+.schedule-block time{min-width:5.6rem;font-size:.84rem;font-weight:700;color:#a72b65;direction:ltr;text-align:left}
+.schedule-block div{display:grid;gap:.2rem;flex:1;min-width:0}
+.schedule-block small{color:#665b63}
+.schedule-edit-btn{flex:none;padding:.42rem .65rem}
+@media(max-width:480px){.schedule-block{gap:.45rem;align-items:flex-start}.schedule-block time{min-width:4.7rem;font-size:.78rem}.schedule-edit-btn{font-size:.78rem;padding:.35rem .5rem}}

@@ -202,6 +202,74 @@
   }
 
 
+
+  /* ---------- Real opening hours from OpenStreetMap (read from the browser) ---------- */
+  const OSM_DAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
+  function parseOpeningHours(raw) {
+    const text = String(raw || "").trim();
+    if (!text) return null;
+    if (/^24\/7$/.test(text)) return { openFrom: "", openTo: "", closedDays: [] };
+    const hm = (v) => { const m = v.match(/^(\d{1,2}):(\d{2})$/); return m ? +m[1] * 60 + +m[2] : NaN; };
+    const week = Array(7).fill(undefined);
+    let explicit = false;
+    for (let rule of text.split(";")) {
+      rule = rule.trim();
+      if (!rule) continue;
+      if (/\b(PH|SH|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec|week|easter|sunrise|sunset)\b/i.test(rule)) continue;
+      const m = rule.match(/^((?:(?:Mo|Tu|We|Th|Fr|Sa|Su)(?:-(?:Mo|Tu|We|Th|Fr|Sa|Su))?)(?:,(?:Mo|Tu|We|Th|Fr|Sa|Su)(?:-(?:Mo|Tu|We|Th|Fr|Sa|Su))?)*)?\s*(.*)$/);
+      if (!m) return null;
+      let days = [0, 1, 2, 3, 4, 5, 6];
+      if (m[1]) {
+        explicit = true;
+        days = [];
+        for (const part of m[1].split(",")) {
+          const [a, b] = part.split("-").map((d) => OSM_DAYS.indexOf(d));
+          if (b === undefined) days.push(a);
+          else for (let d = a, n = 0; n < 7; d = (d + 1) % 7, n++) { days.push(d); if (d === b) break; }
+        }
+      }
+      const times = m[2].trim();
+      if (/^(off|closed)$/i.test(times)) { for (const d of days) week[d] = null; continue; }
+      const ranges = times.split(",").map((r) => r.trim().split("-").map(hm));
+      if (!ranges.length || ranges.some((r) => r.length !== 2 || r.some((x) => !Number.isFinite(x)))) return null;
+      const from = Math.min(...ranges.map((r) => r[0]));
+      const to = Math.max(...ranges.map((r) => (r[1] <= r[0] ? 1439 : r[1])));
+      for (const d of days) week[d] = [from, to];
+    }
+    if (!week.some((d) => d !== undefined)) return null;
+    for (let d = 0; d < 7; d++) if (week[d] === undefined) week[d] = explicit ? null : week[d];
+    const open = week.filter(Array.isArray);
+    if (!open.length) return null;
+    const clock = (v) => `${String(Math.floor(v / 60)).padStart(2, "0")}:${String(v % 60).padStart(2, "0")}`;
+    const from = Math.max(...open.map((d) => d[0])), to = Math.min(...open.map((d) => d[1]));
+    if (to <= from) return null;
+    return { openFrom: clock(from), openTo: to >= 1439 ? "23:59" : clock(to), closedDays: week.map((d, i) => (d === null ? i : -1)).filter((i) => i >= 0) };
+  }
+  async function enrichOpeningHours(list) {
+    const withOsm = (list || []).filter((a) => a && a.osm && ["N", "W", "R"].includes(a.osm.type) && Number.isFinite(+a.osm.id));
+    if (!withOsm.length) return 0;
+    const kind = { N: "node", W: "way", R: "relation" };
+    const q = `[out:json][timeout:8];(${withOsm.map((a) => `${kind[a.osm.type]}(${+a.osm.id});`).join("")});out tags;`;
+    try {
+      const res = await fetch("https://overpass-api.de/api/interpreter", { method: "POST", body: "data=" + encodeURIComponent(q), headers: { "Content-Type": "application/x-www-form-urlencoded" }, signal: AbortSignal.timeout(6000) });
+      if (!res.ok) return 0;
+      const data = await res.json();
+      const hours = new Map();
+      for (const el of data.elements || []) if (el.tags && el.tags.opening_hours) hours.set(String(el.type)[0].toUpperCase() + el.id, el.tags.opening_hours);
+      let used = 0;
+      for (const a of withOsm) {
+        const h = parseOpeningHours(hours.get(a.osm.type + a.osm.id));
+        if (!h) continue;
+        Object.assign(a, h, { hoursVerified: true });
+        used++;
+      }
+      return used;
+    } catch {
+      return 0;
+    }
+  }
+  window.TriplyOpeningHours = { parse: parseOpeningHours };
+
   /* ---------- Several cities / hotels in one trip ---------- */
   const isoDay = (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d || ""));
   const addDays = (d, n) => new Date(Date.parse(d + "T12:00:00Z") + n * 86400000).toISOString().slice(0, 10);
@@ -258,6 +326,8 @@
     // Requested places: put each one in the city it is closest to.
     const wanted = mustSee.concat(stops.map((s) => s.name));
     const poolOf = new Map(pools.map((p) => [norm(p.city), p]));
+    onStep("בודק שעות פתיחה אמיתיות במפה…");
+    await Promise.all(pools.map((p) => enrichOpeningHours(p.data.attractions)));
     for (const p of pools) p.data.attractions = (p.data.attractions || []).filter((a) => km(p.data.cityCenter, a) <= 50 || !Number.isFinite(a.lat));
     onStep("משבץ כל עיר לפי אזורים, זמני הליכה ושעות פתיחה…");
     const used = new Set();
@@ -320,6 +390,8 @@
         trip: { city: trip.city, start: trip.start, end: trip.end, people: trip.people, hotel: st.hotel, travelType: st.travelType, activityTypes: st.interests, stops: stops.map((s) => ({ name: s.name })) },
         answers: { mustSee, pace: st.pace, interests: st.interests, travelType: st.travelType, budget: st.budget, exclude: [] },
       });
+      onStep("בודק שעות פתיחה אמיתיות במפה…");
+      await enrichOpeningHours(data.attractions);
       onStep("משבץ לפי אזורים, זמני הליכה ונסיעה, שעות פתיחה וארוחות…");
       const norm = ItineraryEngine.norm;
       attractions = data.attractions.map((a, rank) => {
@@ -398,11 +470,13 @@
           .join("")}</ol></details>`;
       })
       .join("");
+    const placedNames = new Set(result.stops.map((x) => ItineraryEngine.norm(x.name)));
+    const verifiedHours = (data.attractions || []).filter((a) => a.hoursVerified && placedNames.has(ItineraryEngine.norm(a.name))).length;
     const reqOk = plan.mustCount && !plan.missingMust.length ? `<p class="ap-ok">✓ כל ${plan.mustCount} המקומות שביקשת נכנסו ללוח.</p>` : "";
     host.innerHTML = `<div class="autoplan">
       <div class="ap-summary"><strong>${schedule.length} ימים · ${attractionCount} אטרקציות · לוח מלא מהקימה ועד השינה</strong>
       <p>${esc(data.message || "")}</p>
-      <p class="muted">נקודת יציאה: ${esc(plan.lodgingName)}. ארוחות מופיעות כהפסקות באזור (בלי המלצות מסעדות, אלא אם תבקש). זמני ההליכה והנסיעה ושעות הפתיחה הם הערכה — כדאי לבדוק לפני היציאה.</p>
+      <p class="muted">נקודת יציאה: ${esc(plan.lodgingName)}. ארוחות מופיעות כהפסקות באזור (בלי המלצות מסעדות, אלא אם תבקש). זמני ההליכה והנסיעה הם הערכה${verifiedHours ? `. שעות הפתיחה של ${verifiedHours} מקומות נבדקו מול OpenStreetMap; לשאר זו הערכה` : " ושעות הפתיחה הם הערכה"} — כדאי לבדוק לפני היציאה.</p>
       ${reqOk}
       ${result.warnings.map((w) => `<p class="ap-warn">⚠ ${esc(w)}</p>`).join("")}
       ${plan.removed.length ? `<p class="ap-warn">יוסרו מהמסלול (לפי הבחירה שלך): ${esc(plan.removed.join(", "))}</p>` : ""}
@@ -473,6 +547,7 @@
       const step = (text) => {
         const el = host.querySelector(".ap-step");
         if (el) el.textContent = text;
+        if (/שעות פתיחה/.test(text)) setStage(2);
         if (/משבץ/.test(text)) setStage(3);
       };
       try {

@@ -336,7 +336,7 @@
       });
     const go = async () => {
       const my = ++token;
-      host.innerHTML = `<div class="autoplan ap-progress"><div class="ap-spinner" aria-hidden="true"></div><p class="ap-step" role="status">מתחיל…</p><p class="muted">זה לוקח בדרך כלל 15–40 שניות.</p></div>`;
+      host.innerHTML = `<div class="autoplan ap-progress"><div class="ap-spinner" aria-hidden="true"></div><p class="ap-step" role="status">מתחיל…</p><p class="muted">זה לוקח בדרך כלל 20–40 שניות, ולפעמים עד דקה (בוחר מקומות, בודק מיקומים במפה ומסדר לפי אזורים).</p></div>`;
       const step = (text) => {
         const el = host.querySelector(".ap-step");
         if (el) el.textContent = text;

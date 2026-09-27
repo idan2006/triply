@@ -461,7 +461,7 @@
     // 1) Group must-sees into walkable areas, then pack whole areas into days so
     //    each day covers one area (or two neighbouring ones) instead of zig-zagging.
     const fullDays = active.filter((f) => f.kind === "full");
-    const mustDays = fullDays.length ? fullDays : active;
+    const mustDays = variant.partial ? active : fullDays.length ? fullDays : active;
     // 1) Distribute must-sees geographically across active days.
     if (variant.mode === "kmeans" && mustDays.length && must.length) {
       const k = Math.min(mustDays.length, must.length);
@@ -867,6 +867,7 @@
   /* Try several ways of grouping the must-see places into days and keep the
    * plan with the least time on public transport (then the most attractions). */
   const VARIANTS = [
+    { mode: "group", near: 3.5, partial: true },
     { mode: "group", near: 3.5 },
     { mode: "group", near: 2.5 },
     { mode: "group", near: 5 },

@@ -271,6 +271,7 @@
     const placed = new Set(result.stops.map((x) => ItineraryEngine.norm(x.name)));
     const missingMust = attractions.filter((a) => a.mustSee && !placed.has(ItineraryEngine.norm(a.name))).map((a) => a.nameHe || a.name);
     const mustCount = attractions.filter((a) => a.mustSee).length;
+    window.__triplyLastPlan = { data, result };
     return { data, result, preview, schedule, removed, requested, mustCount, missingMust, lodgingName, lodgingPoint: home };
   }
 

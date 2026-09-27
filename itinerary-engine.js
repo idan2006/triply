@@ -601,6 +601,8 @@
             const elsewhere = others.length ? Math.min(...others.map((o) => km(o, c) || 99)) : 99;
             let score = own + c.rank * (set.length ? 0.2 : 0.6) + 0.8 * Math.max(0, own - elsewhere);
             if (late && c.bestTime === "evening") score -= 2;
+            if (late && (c.openTo === null || c.openTo >= 21 * 60 + 30)) score -= 1.5;
+            if (!late && c.openTo === null && c.bestTime !== "morning") score += 0.8;
             if (!late && c.bestTime === "evening" && !set.length) score += 3;
             if (f.kind !== "full") score += (km(home, c) || 0) * 0.5;
             return { c, score };

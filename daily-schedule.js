@@ -10,15 +10,26 @@
     if(!list)return;
     const stale=trip.scheduleStopSnapshot!==JSON.stringify(trip.stops);
     const section=document.createElement('section');
-      section.className='full-day-schedule';
-      section.setAttribute('aria-label','לוח היום המלא');
-    section.innerHTML=`<div class="full-day-heading"><div><h4>לוח היום המלא</h4><span>קימה ${escapeHTML(day.wakeTime)} · שינה ${escapeHTML(day.sleepTime)}</span></div><button type="button" class="small-btn" id="editDayTimes">עריכת שעות קימה ושינה</button></div>
-      ${stale?'<p class="schedule-warning">האטרקציות השתנו מאז יצירת הלוח. כדאי לבקש מהמתכנן לעדכן את לוח היום לפני שמסתמכים עליו.</p>':''}
-      <p class="schedule-caveat">שעות פתיחה וזמני מעבר הם הערכות תכנון; בדוק אותם לפני היציאה.</p>
-      <ol class="schedule-blocks">${day.blocks.map((block,index)=>`<li class="schedule-block ${block.placeName?'sb-place':/^הליכה|חזרה ללינה \(הליכה/.test(block.activity)?'sb-walk':/תחבורה|מונית|שדה התעופה|נסיעה/.test(block.activity)?'sb-ride':/ארוחת|צהריים|קפה/.test(block.activity)?'sb-meal':''}"><time>${escapeHTML(block.startTime)}–${escapeHTML(block.endTime)}</time><div><strong>${escapeHTML(block.activity)}</strong>${block.placeName?`<small>${escapeHTML(block.placeName)}</small>`:''}</div><button type="button" class="small-btn schedule-edit-btn" data-edit-schedule="${index}" aria-label="עריכת ${escapeHTML(block.activity)}">עריכה</button></li>`).join('')}</ol>
-      <h4 class="scheduled-stops-heading">אטרקציות במסלול לעריכה</h4>`;
+    section.className='full-day-schedule';
+    section.setAttribute('aria-label','לוח היום');
+    const norm=v=>String(v||'').trim().toLocaleLowerCase();
+    const dayStops=trip.stops.filter(stop=>stop.date===day.date);
+    const linked=new Set();
+    const stopFor=block=>{if(!block.placeName)return null;const byId=block.existingStopId&&dayStops.find(stop=>stop.id===block.existingStopId);const hit=byId||dayStops.find(stop=>norm(stop.name)===norm(block.placeName)&&stop.time===block.startTime)||dayStops.find(stop=>norm(stop.name)===norm(block.placeName));if(hit)linked.add(hit.id);return hit||null;};
+    const kind=block=>block.placeName?'sb-place':/^הליכה|\(הליכה/.test(block.activity)?'sb-walk':/תחבורה|מונית|שדה התעופה|נסיעה/.test(block.activity)?'sb-ride':/ארוחת|צהריים|קפה/.test(block.activity)?'sb-meal':'';
+    const rows=day.blocks.map((block,index)=>{const stop=stopFor(block);return `<li class="schedule-block ${kind(block)}"><button type="button" class="sb-row" ${stop?`data-edit-stop-row="${escapeHTML(stop.id)}"`:`data-edit-schedule="${index}"`} aria-label="עריכה: ${escapeHTML(block.activity)}"><time>${escapeHTML(block.startTime)}</time><span class="sb-text"><strong>${escapeHTML(block.activity)}</strong>${block.placeName&&!block.activity.includes(block.placeName)?`<small>${escapeHTML(block.placeName)}</small>`:''}</span><span class="sb-end">עד ${escapeHTML(block.endTime)}</span></button></li>`;}).join('');
+    section.innerHTML=`<div class="full-day-heading"><h4>לוח היום</h4><button type="button" class="text-btn" id="editDayTimes">קימה ${escapeHTML(day.wakeTime)} · שינה ${escapeHTML(day.sleepTime)} · שינוי</button></div>
+      ${stale?'<p class="schedule-warning">שינית אטרקציות אחרי שהלוח נבנה. לחץ על "תכנן לי את כל הטיול" כדי לבנות אותו מחדש.</p>':''}
+      <ol class="schedule-blocks">${rows}</ol>
+      <p class="schedule-caveat">לחיצה על שורה פותחת עריכה. שעות פתיחה וזמני הליכה הם הערכה — כדאי לבדוק לפני היציאה.</p>`;
     section.querySelector('#editDayTimes').onclick=()=>editDayTimes(trip,day);
     section.querySelectorAll('[data-edit-schedule]').forEach(button=>button.onclick=()=>editScheduleBlock(trip,day,Number(button.dataset.editSchedule)));
+    section.querySelectorAll('[data-edit-stop-row]').forEach(button=>button.onclick=()=>(window.editStop||editStop)(button.dataset.editStopRow));
+    // Attractions already shown in the timeline are not listed a second time.
+    list.querySelectorAll('.stop').forEach(row=>{const id=row.querySelector('[data-edit-stop]')?.dataset.editStop;if(id&&linked.has(id))row.remove();});
+    const extra=list.querySelectorAll('.stop').length;
+    if(extra)section.insertAdjacentHTML('beforeend','<h4 class="scheduled-stops-heading">נוספו אחרי שהלוח נבנה</h4>');
+    list.querySelector('.empty-state')?.remove();
     list.prepend(section);
   };
 

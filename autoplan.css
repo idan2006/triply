@@ -50,3 +50,19 @@
 .doc-add{display:flex;align-items:center;justify-content:center;border:1.5px dashed #e7b6cb;border-radius:10px;padding:10px;cursor:pointer;color:var(--pink-dark);font-weight:700;position:relative}
 .doc-add input{position:absolute;inset:0;opacity:0;cursor:pointer}
 .doc-add:focus-within{outline:2px solid var(--pink)}
+.ap-live{align-items:stretch;text-align:right;gap:12px;padding:20px 4px}
+.ap-live-title{margin:0;font-family:var(--display,inherit);font-weight:400;font-size:24px}
+.ap-bar{height:8px;border-radius:99px;background:var(--pink-soft);overflow:hidden}
+.ap-bar i{display:block;height:100%;width:4%;background:var(--pink);border-radius:99px;transition:width 1s ease}
+.ap-stages{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.ap-stages li{display:flex;align-items:center;gap:10px;color:var(--muted);font-weight:600}
+.ap-stages li::before{content:'';width:20px;height:20px;border-radius:50%;border:2px solid #E0BFCC;flex-shrink:0;box-sizing:border-box}
+.ap-stages li.now{color:var(--ink)}
+.ap-stages li.now::before{border-color:var(--pink);border-top-color:transparent;animation:apspin 1s linear infinite}
+.ap-stages li.done{color:var(--ink)}
+.ap-stages li.done::before{background:var(--pink) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='3.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M5 12l5 5 9-10'/%3E%3C/svg%3E") center/12px no-repeat;border-color:var(--pink)}
+.ap-live .ap-step{font-weight:600;color:var(--muted);font-size:14px}
+.ap-tip{background:#FFF6DB;color:#5C3F00!important;border-radius:12px;padding:10px 12px;margin:0;min-height:2.6em}
+.ap-day{animation:apin .45s ease both}
+@keyframes apin{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.ap-day{animation:none}.ap-bar i{transition:none}}

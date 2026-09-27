@@ -104,3 +104,52 @@ body{background:var(--bg);color:var(--ink)}
 .new-trip-cta .cta-go svg{width:20px;height:20px}
 .hero-card .light-btn{margin-top:26px}
 .hero-card .light-btn::before{top:-14px;inset-inline:-300px;inset-block-end:auto}
+
+/* Simpler itinerary (single tappable timeline) */
+.trip-footer{display:none}
+.full-day-heading{align-items:center}
+.full-day-heading .text-btn{font-size:14px;font-weight:700;min-height:44px}
+.schedule-block{padding:0;margin:.25rem 0}
+.sb-row{width:100%;display:flex;align-items:center;gap:.8rem;padding:.6rem .7rem;border-radius:14px;background:transparent;text-align:right;min-height:48px;color:inherit}
+.sb-row:hover{outline:1px solid #F2A9C5}
+.sb-row time{min-width:3.2rem;font-weight:800;font-size:.95rem;direction:ltr;text-align:right;color:var(--ink)}
+.sb-text{display:grid;gap:.1rem;flex:1;min-width:0}
+.sb-text small{color:var(--muted)}
+.sb-end{font-size:.78rem;color:var(--muted);white-space:nowrap}
+.schedule-block.sb-walk .sb-row,.schedule-block.sb-ride .sb-row{min-height:36px;padding-block:.3rem}
+.schedule-block.sb-walk .sb-end,.schedule-block.sb-ride .sb-end{display:none}
+.schedule-caveat{margin:.4rem 0 0}
+.action-sheet{display:grid;gap:8px;margin-top:14px}
+.action-sheet button{display:grid;gap:2px;text-align:right;background:#fff;border:1px solid var(--line);border-radius:16px;padding:14px 16px;font-weight:800;font-size:16px;min-height:56px}
+.action-sheet small{font-weight:500;color:var(--muted);font-size:13px}
+.action-sheet .danger{color:#B3261E}
+#itineraryPanel>.section-head h2{white-space:nowrap;font-size:20px}
+.plan-actions{flex-wrap:nowrap}
+.day-title>div>p:not(.travel-note):not(.wx-line){display:none}
+.today-card{background:var(--plum);color:#fff;border-radius:22px;padding:16px 18px;margin-bottom:14px;display:grid;gap:10px}
+.today-kicker{color:var(--sun);font-weight:800;font-size:13px}
+.today-now,.today-next{display:grid;grid-template-columns:auto 1fr auto;align-items:baseline;gap:10px}
+.today-now span,.today-next span{font-size:12px;font-weight:800;background:rgba(255,255,255,.14);border-radius:999px;padding:3px 9px}
+.today-now b{font-size:18px}
+.today-next b{font-size:15px;font-weight:700;color:#F6DCE7}
+.today-now small,.today-next small{color:#E8B9CE}
+.today-done{margin:0;color:#F6DCE7}
+.today-nav{display:flex;align-items:center;justify-content:center;min-height:48px;border-radius:14px;background:#fff;color:var(--plum)!important;font-weight:800;text-decoration:none}
+.day .wx{display:flex;align-items:center;justify-content:center;gap:2px;font-size:11px;font-weight:700;opacity:.9}
+.wx-ic{width:14px;height:14px;flex-shrink:0}
+.wx-line{display:flex;align-items:center;gap:6px;margin:6px 0 0;font-size:14px;color:var(--muted);font-weight:600}
+.wx-line .wx-ic{width:18px;height:18px}
+.wx-line.wet{color:#1D4F91}
+.wx-tip{background:#E7F0FC;border-radius:12px;padding:8px 10px;font-weight:600}
+.hotel-row{border:1px solid var(--line);border-radius:16px;padding:10px 12px;margin:0 0 10px}
+.hotel-row legend{font-weight:800;padding:0 6px}
+.share-card{background:#fff;border:1px solid var(--line);border-radius:22px;padding:18px;display:grid;gap:10px}
+.share-card h2{margin:0;font-family:var(--display);font-weight:400;font-size:24px}
+.share-card h3{margin:8px 0 0;font-size:16px}
+.share-card p{margin:0;color:var(--muted);line-height:1.5}
+.share-link{display:grid;gap:8px}
+.share-link input{width:100%;box-sizing:border-box;border:1px solid var(--line);border-radius:12px;padding:12px;font:inherit;font-size:13px;direction:ltr;background:var(--bg);color:var(--ink)}
+.member-list{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.member-list li{display:flex;align-items:center;gap:10px;padding:8px 0;border-bottom:1px solid var(--line)}
+.member-list li span:nth-child(2){flex:1;overflow:hidden;text-overflow:ellipsis}
+.member-dot{width:34px;height:34px;border-radius:50%;background:var(--pink-soft);color:var(--pink-dark);display:grid;place-items:center;font-weight:800;flex-shrink:0}

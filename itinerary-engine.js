@@ -194,13 +194,13 @@
         f.wake = a;
         const landed = Math.min(1439, a + 90),
           checkedIn = Math.min(1439, a + 120);
-        f.pre.push([a, landed, "נחיתה, ביקורת גבולות ונסיעה ללינה", ""]);
+        f.pre.push([a, landed, (arrival.label || "נחיתה, ביקורת גבולות ונסיעה ללינה"), ""]);
         cursor = checkedIn;
         if (a + 120 >= f.sleep - 90 || a + 120 > 1320) {
           // Late landing: the day is only arriving and resting.
           f.wake = Math.min(a, 1410);
           const land2 = Math.min(f.wake + 90, 1425);
-          f.pre = [[f.wake, land2, "נחיתה, ביקורת גבולות ונסיעה ללינה", ""]];
+          f.pre = [[f.wake, land2, (arrival.label || "נחיתה, ביקורת גבולות ונסיעה ללינה"), ""]];
           f.sleep = Math.max(f.sleep, Math.min(1439, land2 + 30));
           f.pre.push([land2, f.sleep, "צ'ק-אין, התארגנות ומנוחה אחרי הטיסה", ""]);
           f.start = null;

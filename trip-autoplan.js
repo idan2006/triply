@@ -201,34 +201,145 @@
       .filter((s) => s.length > 1 && s.length <= 120);
   }
 
+
+  /* ---------- Several cities / hotels in one trip ---------- */
+  const isoDay = (d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d || ""));
+  const addDays = (d, n) => new Date(Date.parse(d + "T12:00:00Z") + n * 86400000).toISOString().slice(0, 10);
+  function tripSegments(trip) {
+    const hotels = (trip.travelDetails?.hotels || [])
+      .filter((h) => h && isoDay(h.checkIn) && isoDay(h.checkOut) && h.checkOut > h.checkIn && h.checkOut > trip.start && h.checkIn <= trip.end)
+      .slice()
+      .sort((a, b) => a.checkIn.localeCompare(b.checkIn));
+    const distinct = new Set(hotels.map((h) => ItineraryEngine.norm(`${h.city || ""}|${h.name || ""}`)));
+    if (hotels.length < 2 || distinct.size < 2) return [];
+    const segs = [];
+    hotels.forEach((h, i) => {
+      const start = i === 0 ? trip.start : h.checkIn < trip.start ? trip.start : h.checkIn;
+      const end = i === hotels.length - 1 ? trip.end : addDays(hotels[i + 1].checkIn, -1);
+      if (end >= start) segs.push({ start, end: end > trip.end ? trip.end : end, city: String(h.city || trip.city).trim(), hotel: String(h.name || "").trim() });
+    });
+    return segs.length > 1 ? segs : [];
+  }
+  const km = (a, b) => {
+    if (!a || !b || !Number.isFinite(a.lat) || !Number.isFinite(b.lat)) return Infinity;
+    const r = Math.PI / 180, x = (b.lng - a.lng) * r * Math.cos(((a.lat + b.lat) / 2) * r), y = (b.lat - a.lat) * r;
+    return Math.sqrt(x * x + y * y) * 6371;
+  };
+  async function geocodeHotel(name, city, near) {
+    try {
+      const q = encodeURIComponent(`${name}, ${city}`);
+      const bias = near && Number.isFinite(near.lat) ? `&lat=${near.lat}&lon=${near.lng}` : "";
+      const res = await fetch(`https://photon.komoot.io/api/?limit=1&q=${q}${bias}`);
+      const c = (await res.json())?.features?.[0]?.geometry?.coordinates;
+      if (c && (!near || km(near, { lat: c[1], lng: c[0] }) < 40)) return { name, lat: c[1], lng: c[0] };
+    } catch {}
+    return null;
+  }
+  function transferTime(trip, seg) {
+    const legs = trip.travelDetails?.flights || [];
+    const leg = legs.slice(1).find((l) => (l.arriveDate || l.date) === seg.start && HHMM.test(l.arriveTime || ""));
+    return leg ? leg.arriveTime : "13:00";
+  }
+  const toCity = (c) => (/^[\u0590-\u05FF]/.test(c) ? "ל" : "ל-") + c;
+  async function multiCityPlan(trip, st, stops, mustSee, segs, onStep) {
+    const norm = ItineraryEngine.norm;
+    const cities = [...new Map(segs.map((g) => [norm(g.city), g.city])).values()];
+    onStep(`בוחר אטרקציות ב${cities.join(" וב")}…`);
+    const pools = await Promise.all(
+      cities.map((city) => {
+        const mine = segs.filter((g) => norm(g.city) === norm(city));
+        return suggestCall({
+          request: [st.request, st.mustSee ? "מקומות חובה (רק אם הם נמצאים ב-" + city + "): " + st.mustSee : ""].filter(Boolean).join("\n"),
+          trip: { city, start: mine[0].start, end: mine.at(-1).end, people: trip.people, hotel: mine[0].hotel, travelType: st.travelType, activityTypes: st.interests, stops: [] },
+          answers: { mustSee: [], pace: st.pace, interests: st.interests, travelType: st.travelType, budget: st.budget, exclude: [] },
+        }).then((d) => ({ city, data: d }));
+      })
+    );
+    // Requested places: put each one in the city it is closest to.
+    const wanted = mustSee.concat(stops.map((s) => s.name));
+    const poolOf = new Map(pools.map((p) => [norm(p.city), p]));
+    for (const p of pools) p.data.attractions = (p.data.attractions || []).filter((a) => km(p.data.cityCenter, a) <= 50 || !Number.isFinite(a.lat));
+    onStep("משבץ כל עיר לפי אזורים, זמני הליכה ושעות פתיחה…");
+    const used = new Set();
+    const merged = { dailySchedule: [], stops: [], warnings: [] };
+    let firstHome = null, rank = 0;
+    for (let i = 0; i < segs.length; i++) {
+      const g = segs[i], p = poolOf.get(norm(g.city)), d = p.data;
+      const pool = d.attractions.filter((a) => !used.has(norm(a.name))).map((a) => {
+        const linked = stops.find((s) => [a.requestedAs, a.name, a.nameHe].some((v) => v && norm(v) === norm(s.name)));
+        const req = wanted.some((w) => [a.requestedAs, a.name, a.nameHe].some((v) => v && norm(v) === norm(w)));
+        return { ...a, rank: rank++, existingStopId: linked ? linked.id : "", mustSee: Boolean(linked) || req };
+      });
+      const firstOfCity = segs.find((x) => norm(x.city) === norm(g.city));
+      let home = firstOfCity === g ? d.lodging : null;
+      if ((!home || !Number.isFinite(home.lat)) && g.hotel) home = await geocodeHotel(g.hotel, g.city, d.cityCenter);
+      if (!home) home = d.lodging;
+      if (i === 0) firstHome = home;
+      const transfer = i > 0 ? transferTime(trip, g) : null;
+      const r = ItineraryEngine.plan({
+        start: g.start,
+        end: g.end,
+        pace: st.pace,
+        wake: st.wake,
+        sleep: st.sleep,
+        arrival: i === 0 ? (st.arrivalTime ? { date: trip.start, time: st.arrivalTime } : {}) : { date: g.start, time: transfer, label: `הגעה ${toCity(g.city)}${g.hotel ? " ונסיעה " + toCity(g.hotel) : ""}` },
+        departure: i === segs.length - 1 && st.departureTime ? { date: trip.end, time: st.departureTime } : {},
+        attractions: pool,
+        cityCenter: d.cityCenter,
+        home: home && Number.isFinite(home.lat) ? home : null,
+      });
+      if (i > 0) {
+        const day = r.dailySchedule[0];
+        const wake = ItineraryEngine.toMin(st.wake), arr = ItineraryEngine.toMin(day?.blocks?.[0]?.startTime);
+        if (day && wake !== null && arr !== null && arr - wake >= 30) {
+          day.blocks.unshift({ startTime: st.wake, endTime: day.blocks[0].startTime, activity: `קימה, צ'ק-אאוט ונסיעה ${toCity(g.city)}`, placeName: "" });
+          day.wakeTime = st.wake;
+        }
+      }
+      for (const s of r.stops) used.add(norm(s.name));
+      merged.dailySchedule.push(...r.dailySchedule);
+      merged.stops.push(...r.stops);
+      merged.warnings.push(...(r.warnings || []).map((w) => `${g.city}: ${w}`));
+    }
+    const all = pools.flatMap((p) => p.data.attractions);
+    const attractions = all.map((a) => ({ ...a, mustSee: wanted.some((w) => [a.requestedAs, a.name, a.nameHe].some((v) => v && norm(v) === norm(w))) }));
+    const data = { ...pools[0].data, attractions: all, message: pools.map((p) => p.data.message).filter(Boolean).join(" ") };
+    return { data, attractions, home: firstHome, result: merged };
+  }
+
   async function buildPlan(trip, st, onStep) {
     const stops = st.keepStops ? trip.stops || [] : [];
     const mustSee = splitList(st.mustSee);
-    onStep("בוחר אטרקציות שמתאימות לסגנון שלכם…");
-    const data = await suggestCall({
-      request: [st.request, st.mustSee ? "מקומות חובה: " + st.mustSee : ""].filter(Boolean).join("\n"),
-      trip: { city: trip.city, start: trip.start, end: trip.end, people: trip.people, hotel: st.hotel, travelType: st.travelType, activityTypes: st.interests, stops: stops.map((s) => ({ name: s.name })) },
-      answers: { mustSee, pace: st.pace, interests: st.interests, travelType: st.travelType, budget: st.budget, exclude: [] },
-    });
-    onStep("משבץ לפי אזורים, זמני הליכה ונסיעה, שעות פתיחה וארוחות…");
-    const norm = ItineraryEngine.norm;
-    const attractions = data.attractions.map((a, rank) => {
-      const linked = stops.find((s) => [a.requestedAs, a.name, a.nameHe].some((v) => v && norm(v) === norm(s.name)));
-      return { ...a, rank, existingStopId: linked ? linked.id : "", mustSee: a.mustSee || Boolean(linked) };
-    });
-    const home = trip.travelDetails?.lodgingPoint && st.hotel && trip.travelDetails.lodgingPoint.name === st.hotel ? trip.travelDetails.lodgingPoint : data.lodging;
-    const result = ItineraryEngine.plan({
-      start: trip.start,
-      end: trip.end,
-      pace: st.pace,
-      wake: st.wake,
-      sleep: st.sleep,
-      arrival: st.arrivalTime ? { date: trip.start, time: st.arrivalTime } : {},
-      departure: st.departureTime ? { date: trip.end, time: st.departureTime } : {},
-      attractions,
-      cityCenter: data.cityCenter,
-      home: home && Number.isFinite(home.lat) ? home : null,
-    });
+    let data, attractions, home, result;
+    const segs = tripSegments(trip);
+    if (segs.length > 1) ({ data, attractions, home, result } = await multiCityPlan(trip, st, stops, mustSee, segs, onStep));
+    else {
+      onStep("בוחר אטרקציות שמתאימות לסגנון שלכם…");
+      data = await suggestCall({
+        request: [st.request, st.mustSee ? "מקומות חובה: " + st.mustSee : ""].filter(Boolean).join("\n"),
+        trip: { city: trip.city, start: trip.start, end: trip.end, people: trip.people, hotel: st.hotel, travelType: st.travelType, activityTypes: st.interests, stops: stops.map((s) => ({ name: s.name })) },
+        answers: { mustSee, pace: st.pace, interests: st.interests, travelType: st.travelType, budget: st.budget, exclude: [] },
+      });
+      onStep("משבץ לפי אזורים, זמני הליכה ונסיעה, שעות פתיחה וארוחות…");
+      const norm = ItineraryEngine.norm;
+      attractions = data.attractions.map((a, rank) => {
+        const linked = stops.find((s) => [a.requestedAs, a.name, a.nameHe].some((v) => v && norm(v) === norm(s.name)));
+        return { ...a, rank, existingStopId: linked ? linked.id : "", mustSee: a.mustSee || Boolean(linked) };
+      });
+      home = trip.travelDetails?.lodgingPoint && st.hotel && trip.travelDetails.lodgingPoint.name === st.hotel ? trip.travelDetails.lodgingPoint : data.lodging;
+      result = ItineraryEngine.plan({
+        start: trip.start,
+        end: trip.end,
+        pace: st.pace,
+        wake: st.wake,
+        sleep: st.sleep,
+        arrival: st.arrivalTime ? { date: trip.start, time: st.arrivalTime } : {},
+        departure: st.departureTime ? { date: trip.end, time: st.departureTime } : {},
+        attractions,
+        cityCenter: data.cityCenter,
+        home: home && Number.isFinite(home.lat) ? home : null,
+      });
+    }
     const problems = ItineraryEngine.checkSchedule(result.dailySchedule);
     if (problems.length) throw Error("בדיקת הלוח נכשלה: " + problems[0]);
     // Proposal for the app's validator: stops to add / move / remove.
@@ -267,7 +378,7 @@
           if (added) block.existingStopId = added.id;
         }
     const requested = mustSee.concat(stops.map((s) => s.name));
-    const lodgingName = st.hotel || (data.lodging?.name ? `${data.lodging.name} (הנחה — לא הגדרת מלון)` : "מרכז העיר (הנחה)");
+    const lodgingName = segs.length > 1 ? segs.map((g) => g.hotel ? `${g.hotel} (${g.city})` : g.city).join(" ← ") : st.hotel || (data.lodging?.name ? `${data.lodging.name} (הנחה — לא הגדרת מלון)` : "מרכז העיר (הנחה)");
     const placed = new Set(result.stops.map((x) => ItineraryEngine.norm(x.name)));
     const missingMust = attractions.filter((a) => a.mustSee && !placed.has(ItineraryEngine.norm(a.name))).map((a) => a.nameHe || a.name);
     const mustCount = attractions.filter((a) => a.mustSee).length;
@@ -282,7 +393,7 @@
     const days = schedule
       .map((d, i) => {
         const places = d.blocks.filter((b) => b.placeName);
-        return `<details class="ap-day"${i === 0 ? " open" : ""}><summary><b>${esc(dayName(d.date))}</b> · ${places.length} מקומות · ${esc(d.wakeTime)}–${esc(d.sleepTime)}<span>${esc(places.map((b) => b.activity.replace(/^ביקור:\s*/, "")).join(" · "))}</span></summary><ol class="ap-blocks">${d.blocks
+        return `<details class="ap-day" style="animation-delay:${i * 120}ms"${i === 0 ? " open" : ""}><summary><b>${esc(dayName(d.date))}</b> · ${places.length} מקומות · ${esc(d.wakeTime)}–${esc(d.sleepTime)}<span>${esc(places.map((b) => b.activity.replace(/^ביקור:\s*/, "")).join(" · "))}</span></summary><ol class="ap-blocks">${d.blocks
           .map((b) => `<li class="${b.placeName ? "ap-place" : /הליכה|נסיעה|חזרה ללינה/.test(b.activity) ? "ap-move" : ""}"><time>${esc(b.startTime)}–${esc(b.endTime)}</time><span>${esc(b.activity)}</span></li>`)
           .join("")}</ol></details>`;
       })
@@ -336,10 +447,33 @@
       });
     const go = async () => {
       const my = ++token;
-      host.innerHTML = `<div class="autoplan ap-progress"><div class="ap-spinner" aria-hidden="true"></div><p class="ap-step" role="status">מתחיל…</p><p class="muted">זה לוקח בדרך כלל 20–40 שניות, ולפעמים עד דקה (בוחר מקומות, בודק מיקומים במפה ומסדר לפי אזורים).</p></div>`;
+      const stages = ["מבין מה מתאים לכם", `בוחר אטרקציות ב${trip.city}`, "בודק מיקומים ושעות פתיחה במפה", "בונה את הימים לפי אזורים והליכה"];
+      const tips = ["אחרי השמירה אפשר ללחוץ על כל שורה בלוח כדי לערוך אותה.", "מקומות קרובים נכנסים לאותו יום, כדי שתלכו ברגל ולא תבלו בתחבורה.", "בזמן הטיול האפליקציה נפתחת על היום של היום, עם כפתור ניווט למקום הבא.", "אפשר לכתוב בצ׳אט \"תזיז את המוזיאון ליום גשום\" והוא יעדכן את הלוח.", "טיול בכמה ערים? בתפריט ⋯ יש \"ערים ומלונות\"."];
+      host.innerHTML = `<div class="autoplan ap-progress ap-live"><h3 class="ap-live-title">מתכנן את ${esc(trip.city)}…</h3><div class="ap-bar" aria-hidden="true"><i></i></div><ol class="ap-stages">${stages.map((x, i) => `<li data-stage="${i}">${esc(x)}</li>`).join("")}</ol><p class="ap-step" role="status">מתחיל…</p><p class="ap-tip muted"></p><p class="muted ap-elapsed"></p></div>`;
+      const t0 = Date.now();
+      let stage = 0;
+      const setStage = (n) => {
+        stage = Math.max(stage, n);
+        host.querySelectorAll("[data-stage]").forEach((li) => li.className = +li.dataset.stage < stage ? "done" : +li.dataset.stage === stage ? "now" : "");
+      };
+      setStage(0);
+      const tick = setInterval(() => {
+        if (!host.isConnected || my !== token) return clearInterval(tick);
+        const sec = Math.round((Date.now() - t0) / 1000);
+        if (sec >= 2 && stage < 1) setStage(1);
+        if (sec >= 14 && stage < 2) setStage(2);
+        const bar = host.querySelector(".ap-bar i");
+        if (bar) bar.style.width = `${Math.min(92, stage >= 3 ? 95 : 100 * (1 - Math.exp(-sec / 22)))}%`;
+        const tip = host.querySelector(".ap-tip");
+        if (tip && sec % 6 === 0) tip.textContent = tips[(sec / 6) % tips.length];
+        const el = host.querySelector(".ap-elapsed");
+        if (el) el.textContent = sec < 45 ? `עברו ${sec} שניות · בדרך כלל 20–40 שניות` : `עברו ${sec} שניות · השרת עמוס קצת, עוד רגע…`;
+      }, 1000);
+      host.querySelector(".ap-tip").textContent = tips[0];
       const step = (text) => {
         const el = host.querySelector(".ap-step");
         if (el) el.textContent = text;
+        if (/משבץ/.test(text)) setStage(3);
       };
       try {
         const plan = await buildPlan(trip, st, step);

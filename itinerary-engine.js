@@ -72,6 +72,27 @@
     busy: { durMul: 0.9, rest: false, maxRest: 60 },
   };
 
+  /* Meal styles the traveller asked for (free-text preferences). */
+  const MEAL_STYLES = {
+    restaurant: { lunch: 70, dinner: 80, breakfast: 50, word: "במסעדה" },
+    street: { lunch: 40, dinner: 45, breakfast: 30, word: "— אוכל רחוב" },
+    supermarket: { lunch: 30, dinner: 40, breakfast: 30, word: "מהסופר", words: { breakfast: "ממה שקניתם בסופר", lunch: "— פיקניק ממצרכים מהסופר", dinner: "— קניות בסופר ואוכל בלינה" } },
+    hotel: { lunch: 45, dinner: 60, breakfast: 45, word: "במלון" },
+    cafe: { lunch: 45, dinner: 60, breakfast: 40, word: "בבית קפה" },
+  };
+  function mealPlan(input) {
+    const m = input.meals || {};
+    const one = (kind, dflt, base) => {
+      const st = MEAL_STYLES[m[kind]];
+      return { dur: st ? st[kind] : dflt, label: st ? `${base} ${(st.words && st.words[kind]) || st.word}` : base };
+    };
+    return {
+      breakfast: one("breakfast", 60, "ארוחת בוקר"),
+      lunch: one("lunch", 60, "ארוחת צהריים"),
+      dinner: one("dinner", 75, "ארוחת ערב"),
+    };
+  }
+
   function dates(start, end) {
     const a = Date.parse(start + "T00:00:00Z"),
       b = Date.parse(end + "T00:00:00Z");
@@ -160,7 +181,10 @@
   function buildDayFrames(input, list, pace) {
     const wakePref = toMin(input.wake) ?? 480;
     let sleepPref = toMin(input.sleep) ?? 1380;
+    // Going to bed after midnight ("00:30") → the day runs until 23:59.
+    if (sleepPref < wakePref && sleepPref <= 5 * 60) sleepPref = 1439;
     if (sleepPref <= wakePref + 300) sleepPref = Math.min(1439, wakePref + 15 * 60);
+    const meal = mealPlan(input);
     const arrival = input.arrival || {},
       departure = input.departure || {};
     const arrMin = toMin(arrival.time),
@@ -182,6 +206,7 @@
         lunchDone: false,
         dinnerDone: false,
         kind: "full",
+        meal,
       };
       const isArrival = arrival.date === date && arrMin !== null;
       const isDeparture = departure.date === date && depMin !== null;
@@ -206,15 +231,26 @@
           f.start = null;
           return f;
         }
-        f.pre.push([landed, checkedIn, "צ'ק-אין / הנחת מזוודות והתארגנות", ""]);
-        if (cursor < 600) {
-          f.pre.push([cursor, cursor + 45, "ארוחת בוקר", ""]);
-          cursor += 45;
+        if (a < 6 * 60) {
+          // Night landing: get to the hotel, sleep, and start the day later in the morning.
+          f.pre.push([landed, checkedIn, "צ'ק-אין במלון (או השארת מזוודות) והתארגנות", ""]);
+          const rise = Math.min(11 * 60, Math.max(wakePref, Math.ceil((checkedIn + 6 * 60) / 30) * 30));
+          f.pre.push([checkedIn, rise, "שינה אחרי טיסת הלילה", ""]);
+          cursor = rise;
+          f.pre.push([cursor, cursor + meal.breakfast.dur, `קימה, התארגנות ו${meal.breakfast.label}`, ""]);
+          cursor += meal.breakfast.dur;
+        } else {
+          f.pre.push([landed, checkedIn, "צ'ק-אין / הנחת מזוודות והתארגנות", ""]);
+          if (cursor < 600) {
+            f.pre.push([cursor, cursor + 45, meal.breakfast.label, ""]);
+            cursor += 45;
+          }
         }
         if (cursor >= 14 * 60 + 30) f.lunchDone = true;
       } else {
-        f.pre.push([f.wake, f.wake + 60, "קימה, התארגנות וארוחת בוקר", ""]);
-        cursor = f.wake + 60;
+        const bf = Math.max(45, meal.breakfast.dur + 15);
+        f.pre.push([f.wake, f.wake + bf, `קימה, התארגנות ו${meal.breakfast.label}`, ""]);
+        cursor = f.wake + bf;
       }
       f.start = cursor;
       f.windowEnd = f.sleep;
@@ -256,8 +292,9 @@
   function capacity(f) {
     if (f.start === null) return 0;
     let cap = f.windowEnd - f.minRest - f.start;
-    if (!f.lunchDone && f.start < 13 * 60 && f.windowEnd > 14 * 60) cap -= 60;
-    if (f.windowEnd - f.minRest >= 20 * 60 + 15 && f.start < 19 * 60) cap -= 75;
+    if (!f.lunchDone && f.start < 13 * 60 && f.windowEnd > 14 * 60) cap -= f.meal.lunch.dur;
+    if (f.windowEnd - f.minRest >= 20 * 60 + 15 && f.start < 19 * 60) cap -= f.meal.dinner.dur;
+    if (f.linger) cap -= f.linger * 3;
     return Math.max(0, cap);
   }
 
@@ -279,8 +316,8 @@
     };
     const meals = (nextDur, nextTravel) => {
       if (!lunch && (t >= 12 * 60 + 15 || (t >= 11 * 60 + 30 && t + nextTravel + nextDur > 14 * 60 + 30))) {
-        add(t, t + 60, `ארוחת צהריים${areaOf(pos)}`);
-        t += 60;
+        add(t, t + f.meal.lunch.dur, `${f.meal.lunch.label}${areaOf(pos)}`);
+        t += f.meal.lunch.dur;
         lunch = true;
       }
       if (!rest && lunch && t >= 15 * 60 + 30 && t < 17 * 60) {
@@ -289,8 +326,8 @@
         rest = true;
       }
       if (!dinner && (t >= 18 * 60 + 45 || (t >= 18 * 60 && t + nextTravel + nextDur > 20 * 60 + 45))) {
-        add(t, t + 75, `ארוחת ערב${areaOf(pos)}`);
-        t += 75;
+        add(t, t + f.meal.dinner.dur, `${f.meal.dinner.label}${areaOf(pos)}`);
+        t += f.meal.dinner.dur;
         dinner = true;
       }
     };
@@ -327,17 +364,22 @@
       else add(t, end, `ביקור: ${item.nameHe && item.nameHe !== item.name ? `${item.nameHe}` : item.name}`, item.name, item);
       t = end;
       pos = item;
+      // Travellers who like to wander get unhurried time in the area after each visit.
+      if (f.linger && !item.filler && order.indexOf(item) < order.length - 1) {
+        add(t, t + f.linger, `זמן לשוטט ברגל${item.area ? " באזור " + item.area : " בסביבה"}`);
+        t += f.linger;
+      }
     }
     // Close the day: lunch / dinner if their time has come.
     if (!lunch && t >= 12 * 60 && t <= 15 * 60 + 30) {
-      add(t, t + 60, `ארוחת צהריים${areaOf(pos)}`);
-      t += 60;
+      add(t, t + f.meal.lunch.dur, `${f.meal.lunch.label}${areaOf(pos)}`);
+      t += f.meal.lunch.dur;
       lunch = true;
     }
     const home2 = travel(pos, home);
-    if (!dinner && t >= 17 * 60 + 45 && t + 75 + home2.min <= f.windowEnd - f.minRest) {
-      add(t, t + 75, `ארוחת ערב${areaOf(pos)}`);
-      t += 75;
+    if (!dinner && t >= 17 * 60 + 45 && t + f.meal.dinner.dur + home2.min <= f.windowEnd - f.minRest) {
+      add(t, t + f.meal.dinner.dur, `${f.meal.dinner.label}${areaOf(pos)}`);
+      t += f.meal.dinner.dur;
       dinner = true;
     }
     if (home2.min > 0 && order.length) {
@@ -436,12 +478,15 @@
     const pace = PACE[input.pace] || PACE.balanced;
     const list = dates(input.start, input.end);
     const frames = buildDayFrames(input, list, pace);
+    const linger = Math.max(0, Math.min(90, Math.round(Number(input.linger) || 0)));
+    for (const f of frames) f.linger = linger;
     const warnings = [];
     let items = dedupe(
       (Array.isArray(input.attractions) ? input.attractions : [])
         .map((x, i) => normalizeItem(x, i, pace))
         .filter(Boolean),
     );
+    if (input.stroll) for (const i of items) if (i.flexible) i.dur = i.baseDur = clamp(round15(i.dur * 1.4), 45, 300);
     const center = validPoint(input.cityCenter) ? input.cityCenter : centroid(items, { lat: NaN, lng: NaN });
     // Items without coordinates: must-sees are kept near the center, others dropped.
     items = items.filter((i) => {
@@ -782,12 +827,12 @@
       }
       // Last resort when the AI pool ran out: explicit free-exploration time
       // (with meals placed around it) instead of an unexplained empty block.
-      for (let k = 0; k < 6 && best.fits && f.windowEnd - best.returnTime > f.maxRest; k++) {
+      for (let k = 0; k < 16 && best.fits && f.windowEnd - best.returnTime > f.maxRest; k++) {
         const last = best.order.slice().reverse().find((i) => !i.filler);
         const at = last || home;
         const area = last?.area || "";
         const dur = Math.min(90, Math.max(30, round15(f.windowEnd - best.returnTime - Math.max(f.minRest, f.maxRest - 30))));
-        const filler = { filler: true, name: "", nameHe: "", label: dur <= 45 ? `${best.returnTime >= 18 * 60 ? "קינוח ושיטוט ערב קצר" : "הפסקת קפה ושיטוט קצר"}${area ? " באזור " + area : " ליד הלינה"}` : `סיור רגלי חופשי — רחובות, חנויות ובתי קפה${area ? " באזור " + area : " ליד הלינה"}`, lat: at.lat, lng: at.lng, area, dur, baseDur: dur, openFrom: null, openTo: null, closedDays: [], bestTime: "any", flexible: false, mustSee: false, rank: 999 };
+        const filler = { filler: true, name: "", nameHe: "", label: dur <= 45 ? `${best.returnTime >= 18 * 60 ? "קינוח ושיטוט ערב קצר" : "הפסקת קפה ושיטוט קצר"}${area ? " באזור " + area : " ליד הלינה"}` : best.returnTime >= 19 * 60 ? `טיול ערב ברחובות המוארים${area ? " באזור " + area : " ליד הלינה"}` : `סיור רגלי חופשי — רחובות, חנויות ובתי קפה${area ? " באזור " + area : " ליד הלינה"}`, lat: at.lat, lng: at.lng, area, dur, baseDur: dur, openFrom: null, openTo: null, closedDays: [], bestTime: "any", flexible: false, mustSee: false, rank: 999 };
         let s2 = simulate(f, [...best.order, filler], home, pace);
         while (!s2.fits && filler.dur > 30) {
           filler.dur -= 15;
@@ -813,6 +858,11 @@
           else s = last.e;
         }
         if (e <= s) return;
+        // Two identical free-time blocks in a row read as one longer block.
+        if (last && !place && !last.place && last.label === label && last.e === s) {
+          last.e = e;
+          return;
+        }
         out.push({ s, e, label, place, item });
       };
       for (const b of f.pre) push(...b);

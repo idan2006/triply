@@ -36,7 +36,7 @@
       ["תרבות והיסטוריה", /היסטורי|תרבות|עתיק/],
       ["נופים ותצפיות", /נוף|תצפית/],
       ["טבע ופארקים", /טבע|פארק|גנים/],
-      ["קניות ושווקים", /קניות|שופינג|שוק|שווקים|קניון|outlet/i],
+      ["קניות ושווקים", /קניות(?!\s*(?:מה|ב|ל)סופר)|שופינג|שוק(?!\s*אוכל)|שווקים|קניון|outlet/i],
       ["חיי לילה והופעות", /חיי לילה|מסיב|מועדו|הופע|מחזמר|בר(?:ים)?\b/],
       ["אוכל ושווקי אוכל", /אוכל|קולינרי|מסעד/],
       ["אטרקציות לילדים", /ילדים|ילד|משפחתי/],
@@ -53,6 +53,82 @@
     if (/רגוע|נינוח|בלי לחץ|לאט/.test(s)) out.pace = "relaxed";
     else if (/עמוס|כמה שיותר|להספיק|אינטנסיבי|מלא מלא/.test(s)) out.pace = "busy";
     return out;
+  }
+
+  /* ---------- Free-text preferences ("we go to bed at 00:00, 3 meals: ...") ---------- */
+  const HEB_NUM = { "אחת עשרה": 11, "שתים עשרה": 12, אחת: 1, אחד: 1, שתיים: 2, שתי: 2, שני: 2, שניים: 2, שלוש: 3, שלושה: 3, ארבע: 4, חמש: 5, שש: 6, שבע: 7, שמונה: 8, תשע: 9, עשר: 10 };
+  const hhmm = (h, m) => `${String(h).padStart(2, "0")}:${String(m || 0).padStart(2, "0")}`;
+  function findTime(text, words, kind) {
+    let s = text;
+    // Hebrew number words → digits ("לישון באחת עשרה" → "לישון ב11")
+    for (const [w, n] of Object.entries(HEB_NUM)) s = s.replace(new RegExp(`(?<=[\\sבל-])${w}(?=[\\s,.;]|$)`, "g"), String(n));
+    const m = s.match(new RegExp(`(?:${words})[^\\d\\n.,;]{0,16}?(\\d{1,2})(?:[:.](\\d{2}))?(\\s*(?:בלילה|בערב|בבוקר|בצהריים|בחצות))?`));
+    if (!m) return kind === "sleep" && new RegExp(`(?:${words})[^\\n.,;]{0,16}חצות`).test(s) ? "00:00" : "";
+    let h = +m[1];
+    const min = m[2] ? +m[2] : 0;
+    const when = (m[3] || "").trim();
+    if (h > 24 || min > 59) return "";
+    if (kind === "sleep") {
+      if (h === 24 || when === "בחצות") h = 0;
+      else if (h === 12) h = 0; // "לישון ב-12" = midnight
+      else if (h >= 6 && h <= 11 && when !== "בבוקר") h += 12; // "לישון ב-11" = 23:00
+    } else if (kind === "wake" && when === "בצהריים" && h < 12) h += 12;
+    return hhmm(h % 24, min);
+  }
+  function parsePrefs(text) {
+    const s = String(text || "").replace(/\s+/g, " ");
+    const out = { ...guessFromText(s), wake: "", sleep: "", meals: {}, linger: 0, stroll: false };
+    out.wake = findTime(s, "לקום|קמים|קם|קימה|להתעורר|מתעוררים|מתעורר|מתחילים את היום", "wake");
+    out.sleep = findTime(s, "לישון|הולכים לישון|הולך לישון|שינה|לשכב|נרדמים|חוזרים למלון|לחזור למלון", "sleep");
+    const mealTypes = [
+      ["restaurant", /מסעד/],
+      ["street", /אוכל רחוב|סטריט|דוכנ|שוק אוכל|פוד טראק|street food/i],
+      ["supermarket", /סופר|מכולת|מצרכים/],
+      ["cafe", /בית קפה|בתי קפה|קפה ומאפה/],
+      ["hotel", /במלון|ארוחת בוקר כלולה|בוקר כלול/],
+    ];
+    const slots = { breakfast: /בוקר/, lunch: /צהר/, dinner: /ערב/ };
+    const meals = {};
+    // Explicit pairs: "ארוחת ערב במסעדה", "צהריים אוכל רחוב", "בוקר מהסופר"
+    for (const part of s.split(/[,.;]|\s(?:ו|וגם\s)(?=ארוח|ב?בוקר|ב?צהר|ב?ערב)/)) {
+      const slotKeys = Object.keys(slots).filter((k) => slots[k].test(part));
+      const type = mealTypes.find(([, re]) => re.test(part));
+      if (slotKeys.length === 1 && type) meals[slotKeys[0]] = type[0];
+    }
+    // "each day one restaurant, one street food, one supermarket" → breakfast / lunch / dinner
+    const mentioned = mealTypes.filter(([, re]) => re.test(s)).map(([k]) => k).filter((k) => !Object.values(meals).includes(k));
+    if (mentioned.length) {
+      const rank = { supermarket: 0, hotel: 0, cafe: 1, street: 2, restaurant: 3 };
+      const free = ["breakfast", "lunch", "dinner"].filter((k) => !meals[k]);
+      const left = mentioned.sort((a, b) => rank[a] - rank[b]);
+      if (left.length >= free.length) free.forEach((k, i) => (meals[k] = left[i]));
+      else
+        for (const k of left) {
+          const want = k === "restaurant" ? "dinner" : k === "supermarket" || k === "hotel" || k === "cafe" ? "breakfast" : "lunch";
+          const slot = free.includes(want) ? want : free.find((x) => !meals[x]);
+          if (slot && !meals[slot]) meals[slot] = k;
+        }
+    }
+    out.meals = meals;
+    if (/לטייל|להסתובב|לשוטט|ללכת הרבה|הרבה הליכה|אוהבים ללכת|אוהב ללכת|ברגל|הליכות|בלי למהר|להרגיש את העיר/.test(s)) {
+      out.stroll = true;
+      out.linger = /הרבה|מאוד|שעות/.test(s) ? 45 : 30;
+    }
+    return out;
+  }
+  const MEAL_WORD = { restaurant: "מסעדה", street: "אוכל רחוב", supermarket: "מהסופר", cafe: "בית קפה", hotel: "במלון" };
+  function prefsSummary(st) {
+    const bits = [];
+    if (st.wake) bits.push(`קימה ${st.wake}`);
+    if (st.sleep) bits.push(`שינה ${st.sleep}`);
+    const m = st.meals || {};
+    const ml = [["breakfast", "בוקר"], ["lunch", "צהריים"], ["dinner", "ערב"]].filter(([k]) => m[k]).map(([k, he]) => `${he}: ${MEAL_WORD[m[k]]}`);
+    if (ml.length) bits.push(ml.join(" · "));
+    if (st.stroll) bits.push(`${st.linger} דק' לשוטט אחרי כל מקום, יותר זמן בפארקים ובשווקים`);
+    if (st.pace) bits.push({ relaxed: "קצב נינוח", balanced: "קצב מאוזן", busy: "קצב עמוס" }[st.pace]);
+    if (st.travelType) bits.push(st.travelType);
+    if (st.interests && st.interests.length) bits.push(st.interests.slice(0, 4).join(", "));
+    return bits;
   }
   function persistPreferences(patch) {
     try {
@@ -92,6 +168,10 @@
       keepStops: true,
       mustSee: "",
       request: String(request || ""),
+      notes: String(preferences.planNotes || ""),
+      meals: preferences.meals && typeof preferences.meals === "object" ? { ...preferences.meals } : {},
+      linger: Number(preferences.linger) || 0,
+      stroll: preferences.stroll === true,
     };
   }
   function missingKeys(st, trip) {
@@ -146,7 +226,9 @@
       }`,
       true,
     );
+    const notesBlock = `<fieldset class="ap-q ap-notes"><legend>ספר לי איך אתם אוהבים לטייל</legend><textarea id="apNotes" rows="4" maxlength="2000" placeholder="למשל: אנחנו קמים ב-9 והולכים לישון ב-12 בלילה. 3 ארוחות ביום — בוקר מהסופר, צהריים אוכל רחוב וערב במסעדה. אוהבים ללכת הרבה ברגל ולהסתובב בעיר ובפארקים, פחות מוזיאונים.">${esc(st.notes)}</textarea><div class="ap-understood" aria-live="polite"></div></fieldset>`;
     host.innerHTML = `<div class="autoplan">
+      ${notesBlock}
       <p class="ap-intro">${ask.length ? "כדי לבנות לך טיול מלא — מהקימה ועד השינה, בלי זמנים מתים — חסרים לי רק כמה פרטים:" : "יש לי כמעט את כל מה שצריך. אם תרצה, הוסף מקומות חובה ולחץ על הכפתור."}</p>
       ${ask.join("")}
       ${mustBlock}
@@ -172,6 +254,41 @@
           });
         }),
     );
+    const understood = host.querySelector(".ap-understood");
+    const applyNotes = () => {
+      const text = host.querySelector("#apNotes").value;
+      st.notes = text;
+      const p = parsePrefs(text);
+      if (p.wake) st.wake = p.wake;
+      if (p.sleep) st.sleep = p.sleep;
+      if (Object.keys(p.meals).length) st.meals = p.meals;
+      if (p.stroll) {
+        st.stroll = true;
+        st.linger = p.linger;
+      }
+      if (p.pace) st.pace = p.pace;
+      if (p.travelType) st.travelType = p.travelType;
+      if (p.interests.length) st.interests = [...new Set([...st.interests, ...p.interests])];
+      const w = host.querySelector("#apWake"),
+        sl = host.querySelector("#apSleep");
+      if (w && p.wake) w.value = p.wake;
+      if (sl && p.sleep) sl.value = p.sleep;
+      host.querySelectorAll("[data-chip]").forEach((b) => {
+        const on = b.dataset.chip === "interests" ? st.interests.includes(b.dataset.value) : st[b.dataset.chip] === b.dataset.value;
+        b.classList.toggle("on", on);
+        b.setAttribute("aria-pressed", String(on));
+      });
+      const bits = prefsSummary(st);
+      if (!text.trim()) understood.innerHTML = "";
+      else if (bits.length) understood.innerHTML = `<b>הבנתי:</b> ${bits.map((b) => `<span>${esc(b)}</span>`).join("")}`;
+      else understood.innerHTML = `<span class="muted">כתוב גם שעות קימה ושינה, איזה ארוחות, או כמה אתם אוהבים ללכת — ואתאים את הלוח.</span>`;
+    };
+    let notesTimer;
+    host.querySelector("#apNotes").addEventListener("input", () => {
+      clearTimeout(notesTimer);
+      notesTimer = setTimeout(applyNotes, 250);
+    });
+    applyNotes();
     host.querySelector('[data-ap="cancel"]').onclick = onCancel;
     host.querySelector('[data-ap="go"]').onclick = () => {
       const val = (id) => host.querySelector("#" + id)?.value ?? "";
@@ -183,7 +300,9 @@
       st.mustSee = val("apMust");
       st.keepStops = host.querySelector("#apKeep") ? host.querySelector("#apKeep").checked : true;
       const err = host.querySelector(".ap-error");
-      if (!HHMM.test(st.wake) || !HHMM.test(st.sleep) || st.sleep <= st.wake) {
+      st.notes = host.querySelector("#apNotes")?.value || st.notes;
+      const afterMidnight = st.sleep <= "05:00";
+      if (!HHMM.test(st.wake) || !HHMM.test(st.sleep) || (st.sleep <= st.wake && !afterMidnight)) {
         err.textContent = "שעת השינה צריכה להיות אחרי שעת הקימה.";
         return;
       }
@@ -203,6 +322,7 @@
 
 
 
+  window.TriplyPrefs = { parse: (t) => parsePrefs(t) };
   /* ---------- Real opening hours from OpenStreetMap (read from the browser) ---------- */
   const OSM_DAYS = ["Su", "Mo", "Tu", "We", "Th", "Fr", "Sa"];
   function parseOpeningHours(raw) {
@@ -317,7 +437,7 @@
       cities.map((city) => {
         const mine = segs.filter((g) => norm(g.city) === norm(city));
         return suggestCall({
-          request: [st.request, st.mustSee ? "מקומות חובה (רק אם הם נמצאים ב-" + city + "): " + st.mustSee : ""].filter(Boolean).join("\n"),
+          request: [st.request, st.notes ? "העדפות המטיילים: " + st.notes : "", st.mustSee ? "מקומות חובה (רק אם הם נמצאים ב-" + city + "): " + st.mustSee : ""].filter(Boolean).join("\n"),
           trip: { city, start: mine[0].start, end: mine.at(-1).end, people: trip.people, hotel: mine[0].hotel, travelType: st.travelType, activityTypes: st.interests, stops: [] },
           answers: { mustSee: [], pace: st.pace, interests: st.interests, travelType: st.travelType, budget: st.budget, exclude: [] },
         }).then((d) => ({ city, data: d }));
@@ -352,6 +472,9 @@
         pace: st.pace,
         wake: st.wake,
         sleep: st.sleep,
+        meals: st.meals,
+        linger: st.linger,
+        stroll: st.stroll,
         arrival: i === 0 ? (st.arrivalTime ? { date: trip.start, time: st.arrivalTime } : {}) : { date: g.start, time: transfer, label: `הגעה ${toCity(g.city)}${g.hotel ? " ונסיעה " + toCity(g.hotel) : ""}` },
         departure: i === segs.length - 1 && st.departureTime ? { date: trip.end, time: st.departureTime } : {},
         attractions: pool,
@@ -386,7 +509,7 @@
     else {
       onStep("בוחר אטרקציות שמתאימות לסגנון שלכם…");
       data = await suggestCall({
-        request: [st.request, st.mustSee ? "מקומות חובה: " + st.mustSee : ""].filter(Boolean).join("\n"),
+        request: [st.request, st.notes ? "העדפות המטיילים: " + st.notes : "", st.mustSee ? "מקומות חובה: " + st.mustSee : ""].filter(Boolean).join("\n"),
         trip: { city: trip.city, start: trip.start, end: trip.end, people: trip.people, hotel: st.hotel, travelType: st.travelType, activityTypes: st.interests, stops: stops.map((s) => ({ name: s.name })) },
         answers: { mustSee, pace: st.pace, interests: st.interests, travelType: st.travelType, budget: st.budget, exclude: [] },
       });
@@ -405,6 +528,9 @@
         pace: st.pace,
         wake: st.wake,
         sleep: st.sleep,
+        meals: st.meals,
+        linger: st.linger,
+        stroll: st.stroll,
         arrival: st.arrivalTime ? { date: trip.start, time: st.arrivalTime } : {},
         departure: st.departureTime ? { date: trip.end, time: st.departureTime } : {},
         attractions,
@@ -502,7 +628,7 @@
       if (plan.lodgingPoint && Number.isFinite(plan.lodgingPoint.lat))
         trip.travelDetails = { ...(trip.travelDetails || {}), lodgingPoint: { name: st.hotel || plan.lodgingPoint.name || "", lat: plan.lodgingPoint.lat, lng: plan.lodgingPoint.lng } };
       save();
-      persistPreferences({ pace: st.pace, paceChosen: true, wake: st.wake, sleep: st.sleep, budgetStyle: st.budget, interests: st.interests.join(", ") });
+      persistPreferences({ pace: st.pace, paceChosen: true, wake: st.wake, sleep: st.sleep, budgetStyle: st.budget, interests: st.interests.join(", "), planNotes: String(st.notes || "").slice(0, 2000), meals: st.meals || {}, linger: st.linger || 0, stroll: Boolean(st.stroll) });
       return true;
     } catch (error) {
       for (const k of keys) trip[k] = before[k];

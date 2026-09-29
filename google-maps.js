@@ -1,5 +1,5 @@
 'use strict';
-/* Day map without any API key: Leaflet + OpenStreetMap tiles (CARTO Voyager), place search via Photon (OSM).
+/* Day map without any API key: Leaflet + OpenStreetMap tiles, place search via Photon (OSM).
  * Travel times are estimates from the itinerary engine; each leg opens real directions in Google Maps. */
 (() => {
   const $ = selector => document.querySelector(selector);
@@ -41,10 +41,11 @@
   function legEstimate(a, b, mode) {
     const street = km(a, b) * 1.3;
     if (street < 0.1) return { min: 0, how: 'walk', street };
-    if (mode === 'WALKING') return { min: Math.max(3, Math.round((street / 4.5) * 60)), how: 'walk', street };
+    if (mode === 'WALKING' && street <= 3.5) return { min: Math.max(3, Math.round((street / 4.5) * 60)), how: 'walk', street };
+    if (mode === 'WALKING') return { min: Math.min(120, up5(12 + (street / 17) * 60)), how: 'transit', street, far: true };
     if (mode === 'DRIVING') return { min: Math.max(5, up5(6 + (street / 22) * 60)), how: 'car', street };
     // Public transport: short hops are still on foot.
-    if (street <= 1.2) return { min: Math.max(3, Math.round((street / 4.5) * 60)), how: 'walk', street };
+    if (street <= 1.6) return { min: Math.max(3, Math.round((street / 4.5) * 60)), how: 'walk', street };
     return { min: Math.min(120, up5(12 + (street / 17) * 60)), how: 'transit', street };
   }
   const HOW = { walk: ['🚶', 'הליכה'], transit: ['🚇', 'תחבורה ציבורית'], car: ['🚗', 'נסיעה'] };
@@ -111,10 +112,9 @@
   async function ensureMap(L) {
     if (!map) {
       map = L.map('tripDayMap', { zoomControl: true, attributionControl: true }).setView([30, 10], 3);
-      L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+      L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
-        subdomains: 'abcd',
-        attribution: '© OpenStreetMap · © CARTO',
+        attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>',
       }).addTo(map);
     }
     if (layer) layer.remove();
@@ -199,7 +199,7 @@
       const legRow = leg => {
         if (!leg || !leg.min) return '';
         const [icon, word] = HOW[leg.how];
-        return `<li class="map-leg"><span aria-hidden="true">${icon}</span><div><small>${word} · כ-${leg.min} דק' · ${leg.street.toFixed(1)} ק״מ</small><a href="${directionsUrl(trip, leg.from, leg.to, leg.how === 'transit' ? 'TRANSIT' : mode)}" target="_blank" rel="noopener">הוראות ב-Google Maps ↗</a></div></li>`;
+        return `<li class="map-leg"><span aria-hidden="true">${icon}</span><div><small>${leg.far ? 'רחוק להליכה — ' : ''}${word} · כ-${leg.min} דק' · ${leg.street.toFixed(1)} ק״מ</small><a href="${directionsUrl(trip, leg.from, leg.to, leg.how === 'transit' ? 'TRANSIT' : mode)}" target="_blank" rel="noopener">הוראות ב-Google Maps ↗</a></div></li>`;
       };
       let html = '';
       const offset = home ? 1 : 0;

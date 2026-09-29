@@ -155,7 +155,7 @@
         else{
           // Wrong slot? Check whether it is the other kind of document.
           var other=kind==='flight'?'hotel':'flight',y=null;
-          try{y=(await aiCall('scan',{kind:other,file:payload})).extracted||{};}catch(e){y=null;}
+          for(var tryNo=0;tryNo<2&&!(y&&docFound(other,y));tryNo++){try{y=(await aiCall('scan',{kind:other,file:payload})).extracted||{};}catch(e){y=null;}}
           if(y&&docFound(other,y)&&docs[kind].indexOf(d)>=0){
             docs[kind]=docs[kind].filter(function(z){return z!==d;});
             d.kind=other;d.result=y;d.state='ok';

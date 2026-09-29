@@ -119,8 +119,20 @@
     }
     if (layer) layer.remove();
     layer = L.layerGroup().addTo(map);
-    setTimeout(() => map.invalidateSize(), 50);
+    map.invalidateSize();
     return map;
+  }
+
+  function fitTo(m, bounds, maxZoom, center) {
+    const apply = () => {
+      m.invalidateSize();
+      if (bounds.length > 1) m.fitBounds(bounds, { padding: [30, 30], maxZoom });
+      else if (bounds.length === 1) m.setView(bounds[0], Math.min(15, maxZoom));
+      else if (center) m.setView([center.lat, center.lng], 12);
+    };
+    apply();
+    setTimeout(apply, 150);
+    setTimeout(apply, 500);
   }
 
   function pin(L, label, home, color) {
@@ -217,9 +229,7 @@
     list.innerHTML = html;
     list.querySelectorAll('[data-go-day]').forEach(li => li.onclick = () => { viewAll = false; selectedDate = li.dataset.goDay; void showDayMap(); });
     external.hidden = true;
-    if (bounds.length > 1) m.fitBounds(bounds, { padding: [30, 30], maxZoom: 15 });
-    else if (bounds.length === 1) m.setView(bounds[0], 14);
-    else if (center) m.setView([center.lat, center.lng], 12);
+    fitTo(m, bounds, 15, center);
     status.textContent = `${days.length} ימים · ${total} מקומות. כל צבע הוא יום — לחץ על יום ברשימה כדי לראות אותו לבד.`;
   }
 
@@ -289,9 +299,7 @@
           }).addTo(layer);
         }
       }
-      if (bounds.length > 1) m.fitBounds(bounds, { padding: [30, 30], maxZoom: 16 });
-      else if (bounds.length === 1) m.setView(bounds[0], 15);
-      else if (center) m.setView([center.lat, center.lng], 12);
+      fitTo(m, bounds, 16, center);
 
       const legRow = leg => {
         if (!leg || !leg.min) return '';

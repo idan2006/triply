@@ -1,4 +1,4 @@
-const CACHE='triply-shell-v20';
+const CACHE='triply-shell-v21';
 const BASE=new URL(self.registration.scope).pathname;
 const ASSETS=['','index.html','styles.css','corrections.css','budget.css','chat.css','auth.css','planner-enhancements.css','daily-schedule.css','trip-model.js','trip-planning.js','app.js','live-data.js','trip-data.js','maps-config.js','google-maps.js','features.js','planner-enhancements.js','trip-wizard.js','auth.js','day-layout.js','daily-schedule.js','itinerary-engine.js','trip-autoplan.js','ux.js','cloud.js','autoplan.css','theme.css','manifest.webmanifest'].map(p=>BASE+p);
 self.addEventListener('install',event=>event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(ASSETS)).then(()=>self.skipWaiting())));

@@ -150,6 +150,20 @@
     return data;
   }
 
+  /* Jev (TypeSafe System One) reads the free-text preferences on the server; the local parser is the instant fallback. */
+  async function jevPrefs(text) {
+    const session = await aiSession();
+    const response = await fetch(AI_SUPABASE_URL + "/functions/v1/trip-planner", {
+      method: "POST",
+      headers: { apikey: AI_PUBLIC_KEY, Authorization: "Bearer " + session.access_token, "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "prefs", text }),
+      signal: AbortSignal.timeout(7000),
+    });
+    if (!response.ok) return null;
+    const data = await response.json().catch(() => null);
+    return data && data.prefs ? data.prefs : null;
+  }
+
   /* ---------- Interview ---------- */
   function interviewState(trip, request) {
     const g = guessFromText(request);
@@ -278,10 +292,46 @@
         b.classList.toggle("on", on);
         b.setAttribute("aria-pressed", String(on));
       });
+      paint(text);
+      askJev(text);
+    };
+    const paint = (text, viaJev) => {
       const bits = prefsSummary(st);
       if (!text.trim()) understood.innerHTML = "";
-      else if (bits.length) understood.innerHTML = `<b>הבנתי:</b> ${bits.map((b) => `<span>${esc(b)}</span>`).join("")}`;
+      else if (bits.length) understood.innerHTML = `<b>הבנתי:</b> ${bits.map((b) => `<span>${esc(b)}</span>`).join("")}${viaJev ? '<em class="ap-jev">✓ נבדק עם Jev</em>' : ""}`;
       else understood.innerHTML = `<span class="muted">כתוב גם שעות קימה ושינה, איזה ארוחות, או כמה אתם אוהבים ללכת — ואתאים את הלוח.</span>`;
+    };
+    // Ask Jev once the traveller pauses typing; apply only if the text did not change meanwhile.
+    let jevTimer, jevSeq = 0;
+    const askJev = (text) => {
+      clearTimeout(jevTimer);
+      if (text.trim().length < 8) return;
+      jevTimer = setTimeout(() => {
+        const my = ++jevSeq;
+        st.jevPending = jevPrefs(text)
+          .then((p) => {
+            if (!p || my !== jevSeq || host.querySelector("#apNotes")?.value !== text) return;
+            if (p.wake) st.wake = p.wake;
+            if (p.sleep) st.sleep = p.sleep;
+            if (p.meals && Object.keys(p.meals).length) st.meals = { ...st.meals, ...p.meals };
+            if (p.stroll) { st.stroll = true; st.linger = p.linger || 30; }
+            else if (p.lessWalking) { st.stroll = false; st.linger = 0; }
+            if (p.pace) st.pace = p.pace;
+            if (p.travelType) st.travelType = p.travelType;
+            if (Array.isArray(p.interests) && p.interests.length) st.interests = [...new Set([...st.interests, ...p.interests])];
+            const w = host.querySelector("#apWake"), sl = host.querySelector("#apSleep");
+            if (w && st.wake) w.value = st.wake;
+            if (sl && st.sleep) sl.value = st.sleep;
+            host.querySelectorAll("[data-chip]").forEach((b) => {
+              const on = b.dataset.chip === "interests" ? st.interests.includes(b.dataset.value) : st[b.dataset.chip] === b.dataset.value;
+              b.classList.toggle("on", on);
+              b.setAttribute("aria-pressed", String(on));
+            });
+            paint(text, true);
+          })
+          .catch(() => {})
+          .finally(() => { if (my === jevSeq) st.jevPending = null; });
+      }, 700);
     };
     let notesTimer;
     host.querySelector("#apNotes").addEventListener("input", () => {
@@ -301,6 +351,16 @@
       st.keepStops = host.querySelector("#apKeep") ? host.querySelector("#apKeep").checked : true;
       const err = host.querySelector(".ap-error");
       st.notes = host.querySelector("#apNotes")?.value || st.notes;
+      if (st.jevPending) {
+        const btn = host.querySelector('[data-ap="go"]');
+        if (btn) btn.disabled = true;
+        Promise.race([st.jevPending, new Promise((r) => setTimeout(r, 4000))]).finally(() => {
+          st.jevPending = null;
+          if (btn) btn.disabled = false;
+          btn && btn.click();
+        });
+        return;
+      }
       const afterMidnight = st.sleep <= "05:00";
       if (!HHMM.test(st.wake) || !HHMM.test(st.sleep) || (st.sleep <= st.wake && !afterMidnight)) {
         err.textContent = "שעת השינה צריכה להיות אחרי שעת הקימה.";

@@ -168,3 +168,13 @@ body{background:var(--bg);color:var(--ink)}
 .day.sb-drop-day{outline:3px dashed var(--pink);outline-offset:2px;transform:scale(1.06)}
 .sb-grip-hint{letter-spacing:-2px;font-weight:800}
 @media (prefers-reduced-motion:reduce){.sb-dragging .schedule-block{transition:none}}
+/* Day map (Leaflet, no API key) */
+.trip-day-map .tm-pin-wrap{background:none;border:0}
+.tm-pin{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;background:#CC2B66;color:#fff;font:700 14px/1 system-ui,sans-serif;border:3px solid #fff;box-shadow:0 3px 10px #3a0f2440}
+.tm-pin.tm-home{background:#3A0F24;font-size:15px}
+.map-stop-list .map-leg{opacity:.9}
+.map-stop-list .map-leg span{background:none!important;color:inherit!important;font-size:18px}
+.map-stop-list .map-leg small{display:block}
+.map-stop-list .map-leg a{font-size:12.5px;color:#CC2B66;font-weight:700;text-decoration:none}
+.map-stop-list .map-home span{background:#3A0F24!important;color:#fff!important}
+.trip-day-map.leaflet-container{font-family:inherit;z-index:0}

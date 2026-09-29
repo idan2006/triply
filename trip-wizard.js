@@ -106,14 +106,15 @@
         return {id:person.id||crypto.randomUUID(),name:name,budget:budget};
       });
     }
-    $('#wizardBack').onclick=function(){if(step>1){step--;$('#formError').textContent='';renderWizard();}};
+    function toTop(){var el=$('#tripForm');while(el){if(el.scrollTop)el.scrollTop=0;el=el.parentElement;}if(window.scrollY)window.scrollTo(0,0);}
+    $('#wizardBack').onclick=function(){if(step>1){step--;$('#formError').textContent='';renderWizard();toTop();}};
     $('#wizardNext').onclick=function(){
       try{
         $('#formError').textContent='';
         if(step===1&&!mode)throw Error('בחר אחת משתי האפשרויות כדי להמשיך');
         if(step===2){if(docs.flight.concat(docs.hotel).some(function(d){return d.state==='busy';}))throw Error('רגע, עדיין סורק קובץ…');checkTripDetails();}
         if(step===3)checkPeople();
-        step++;renderWizard();
+        step++;renderWizard();toTop();
       }catch(error){if(step===1)$('#sourceError').textContent=error.message;else $('#formError').textContent=error.message;}
     };
     /* ---- Travel documents: separate flight / hotel uploads, optional, unlimited files ---- */
@@ -131,7 +132,7 @@
         var list=docs[kind];
         host.innerHTML=list.map(function(d,i){
           return '<div class="doc-slot doc-'+d.state+'"><span class="doc-name">'+escapeHTML(docLabel(kind,i))+' · '+escapeHTML(d.fileName)+'</span>'+
-            '<span class="doc-state">'+(d.state==='busy'?'סורק…':d.state==='ok'?'✓ '+escapeHTML(docSummary(d)):'⚠ '+escapeHTML(d.error||'הסריקה נכשלה'))+'</span>'+
+            '<span class="doc-state">'+(d.state==='busy'?'סורק…':d.state==='ok'?'✓ '+escapeHTML(docSummary(d)):'⚠ '+escapeHTML(d.error||'הסריקה נכשלה'))+'</span>'+(d.note?'<span class="doc-note">↪ '+escapeHTML(d.note)+'</span>':'')+
             '<button type="button" class="small-btn" data-doc-remove="'+kind+':'+d.id+'" aria-label="הסרת הקובץ">×</button></div>';
         }).join('')+
         '<label class="doc-add"><input type="file" data-doc-kind="'+kind+'" accept="application/pdf,image/jpeg,image/png,image/webp"><span>'+(list.length?'＋ הוספת '+(kind==='flight'?'כרטיס טיסה נוסף':'אישור מלון נוסף'):'＋ העלאת '+(kind==='flight'?'כרטיס טיסה':'אישור מלון'))+'</span></label>';
@@ -147,11 +148,29 @@
       try{
         var bytes=new Uint8Array(await file.arrayBuffer()),binary='';
         for(var i=0;i<bytes.length;i+=32768)binary+=String.fromCharCode.apply(null,bytes.subarray(i,i+32768));
-        var data=await aiCall('scan',{kind:kind,file:{type:file.type,data:btoa(binary)}});
-        d.result=data.extracted||{};d.state='ok';
+        var payload={type:file.type,data:btoa(binary)};
+        var data=await aiCall('scan',{kind:kind,file:payload});
+        var x=data.extracted||{};
+        if(docFound(kind,x)){d.result=x;d.state='ok';}
+        else{
+          // Wrong slot? Check whether it is the other kind of document.
+          var other=kind==='flight'?'hotel':'flight',y=null;
+          try{y=(await aiCall('scan',{kind:other,file:payload})).extracted||{};}catch(e){y=null;}
+          if(y&&docFound(other,y)&&docs[kind].indexOf(d)>=0){
+            docs[kind]=docs[kind].filter(function(z){return z!==d;});
+            d.kind=other;d.result=y;d.state='ok';
+            d.note=kind==='flight'?'זה אישור מלון ולא כרטיס טיסה — העברתי אותו לאישורי מלון':'זה כרטיס טיסה ולא אישור מלון — העברתי אותו לכרטיסי הטיסה';
+            docs[other].push(d);kind=other;
+            status.textContent='שים לב: '+d.note+'.';
+          }else{
+            d.state='error';
+            d.error=kind==='flight'?'זה לא נראה כמו כרטיס טיסה. בדוק שהעלית את הקובץ הנכון (כרטיס או אישור הזמנה של טיסה).':'זה לא נראה כמו אישור מלון. בדוק שהעלית את הקובץ הנכון (אישור הזמנה של מלון או דירה).';
+          }
+        }
       }catch(error){d.state='error';d.error=error.message||'הסריקה נכשלה';}
       if(docs[kind].indexOf(d)>=0){applyDocs();renderDocs();}
     }
+    function docFound(kind,x){return kind==='flight'?(x.flights||[]).length>0:(x.hotels||[]).length>0;}
     function applyDocs(){
       var legs=[],hotels=[],prepaid=[],people=0,dest='';
       docs.flight.concat(docs.hotel).forEach(function(d){

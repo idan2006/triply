@@ -149,11 +149,11 @@
         var bytes=new Uint8Array(await file.arrayBuffer()),binary='';
         for(var i=0;i<bytes.length;i+=32768)binary+=String.fromCharCode.apply(null,bytes.subarray(i,i+32768));
         var payload={type:file.type,data:btoa(binary)};
-        var data=await aiCall('scan',{kind:kind,file:payload});
-        var x=data.extracted||{};
-        if(docFound(kind,x)){d.result=x;d.state='ok';}
+        var x=null,firstError=null;
+        try{x=(await aiCall('scan',{kind:kind,file:payload})).extracted||{};}catch(e){firstError=e;}
+        if(x&&docFound(kind,x)){d.result=x;d.state='ok';}
         else{
-          // Wrong slot? Check whether it is the other kind of document.
+          // Wrong slot? Check whether it is the other kind of document (also when the first read failed).
           var other=kind==='flight'?'hotel':'flight',y=null;
           for(var tryNo=0;tryNo<2&&!(y&&docFound(other,y));tryNo++){try{y=(await aiCall('scan',{kind:other,file:payload})).extracted||{};}catch(e){y=null;}}
           if(y&&docFound(other,y)&&docs[kind].indexOf(d)>=0){
@@ -162,6 +162,8 @@
             d.note=kind==='flight'?'זה אישור מלון ולא כרטיס טיסה — העברתי אותו לאישורי מלון':'זה כרטיס טיסה ולא אישור מלון — העברתי אותו לכרטיסי הטיסה';
             docs[other].push(d);kind=other;
             status.textContent='שים לב: '+d.note+'.';
+          }else if(firstError){
+            d.state='error';d.error=firstError.message||'הסריקה נכשלה';
           }else{
             d.state='error';
             d.error=kind==='flight'?'זה לא נראה כמו כרטיס טיסה. בדוק שהעלית את הקובץ הנכון (כרטיס או אישור הזמנה של טיסה).':'זה לא נראה כמו אישור מלון. בדוק שהעלית את הקובץ הנכון (אישור הזמנה של מלון או דירה).';

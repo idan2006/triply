@@ -123,13 +123,104 @@
     return map;
   }
 
-  function pin(L, label, home) {
+  function pin(L, label, home, color) {
     return L.divIcon({
       className: 'tm-pin-wrap',
-      html: `<span class="tm-pin${home ? ' tm-home' : ''}">${label}</span>`,
+      html: `<span class="tm-pin${home ? ' tm-home' : ''}"${color ? ` style="background:${color}"` : ''}>${label}</span>`,
       iconSize: [30, 30],
       iconAnchor: [15, 15],
     });
+  }
+
+  const DAY_COLORS = ['#CC2B66', '#2E7DAF', '#E07A2E', '#3C9D5D', '#8A4FBF', '#C9A227', '#D14B4B', '#3A0F24'];
+  let viewAll = false;
+  const norm = v => String(v || '').replace(/^ביקור:\s*/, '').trim().toLocaleLowerCase();
+
+  /* Travel the trip plan already decided for this day: leg before each visit + the way back to the hotel. */
+  function plannedLegs(trip, date) {
+    const day = (trip.dailySchedule || []).find(d => d.date === date);
+    if (!day || !Array.isArray(day.blocks)) return null;
+    const byKey = new Map();
+    let pending = null, home = null, seenVisit = false;
+    for (const b of day.blocks) {
+      const a = String(b.activity || '');
+      const back = a.match(/^חזרה ללינה \((הליכה|תחבורה ציבורית|מונית)\s*~(\d+) דק'\)/);
+      if (back && !b.placeName) { home = { how: back[1] === 'הליכה' ? 'walk' : back[1] === 'מונית' ? 'car' : 'transit', min: +back[2], planned: true }; continue; }
+      const go = a.match(/^(הליכה|נסיעה בתחבורה ציבורית|נסיעה במונית)[^(]*\(~(\d+) דק'\)/);
+      if (go && !b.placeName) {
+        const leg = { how: go[1] === 'הליכה' ? 'walk' : go[1] === 'נסיעה במונית' ? 'car' : 'transit', min: +go[2], planned: true };
+        pending = pending ? { ...leg, min: pending.min + leg.min, how: pending.how === 'walk' ? leg.how : pending.how } : leg;
+        continue;
+      }
+      if (b.placeName) {
+        const leg = pending || (seenVisit ? { how: 'walk', min: 0, planned: true } : null);
+        if (leg) {
+          if (b.existingStopId) byKey.set('id:' + b.existingStopId, leg);
+          byKey.set(norm(b.placeName), leg);
+          byKey.set(norm(b.activity), leg);
+        }
+        pending = null; seenVisit = true;
+      }
+    }
+    return { byKey, home };
+  }
+  const plannedFor = (plan, stop) => plan && (plan.byKey.get('id:' + stop.id) || plan.byKey.get(norm(stop.name))) || null;
+
+  function renderDayChips(trip) {
+    const host = $('#mapDays');
+    if (!host) return;
+    const days = TripModel.dates(trip.start, trip.end);
+    const short = d => new Intl.DateTimeFormat('he-IL', { day: 'numeric', month: 'numeric', timeZone: 'UTC' }).format(new Date(d + 'T12:00:00Z'));
+    host.innerHTML = `<button type="button" class="map-day${viewAll ? ' on' : ''}" data-map-day="all">כל הטיול</button>` +
+      days.map((d, i) => `<button type="button" class="map-day${!viewAll && d === selectedDate ? ' on' : ''}" data-map-day="${d}"${viewAll ? ` style="--dc:${DAY_COLORS[i % DAY_COLORS.length]}"` : ''}><b>יום ${i + 1}</b><small>${short(d)}</small></button>`).join('');
+    host.querySelectorAll('[data-map-day]').forEach(b => b.onclick = () => {
+      if (b.dataset.mapDay === 'all') viewAll = true;
+      else { viewAll = false; selectedDate = b.dataset.mapDay; }
+      void showDayMap();
+    });
+    const on = host.querySelector('.on');
+    if (on) on.scrollIntoView({ block: 'nearest', inline: 'center' });
+  }
+
+  async function homeOf(trip, center) {
+    const lodging = trip.travelDetails?.lodgingPoint;
+    if (valid(lodging)) return { name: trip.hotel || 'המלון', pt: { lat: Number(lodging.lat), lng: Number(lodging.lng) }, home: true };
+    if (trip.hotel) return { name: trip.hotel, pt: await geocode(`${trip.hotel} ${trip.city}`, center), home: true };
+    return null;
+  }
+
+  async function showWholeTrip(trip, L, m, center) {
+    const status = $('#mapStatus'), list = $('#mapStopList'), external = $('#externalDayRoute');
+    const days = TripModel.dates(trip.start, trip.end);
+    $('#dayMapSubtitle').textContent = `כל הטיול · ${trip.city}`;
+    status.textContent = 'מאתר את המקומות…';
+    const home = await homeOf(trip, center);
+    const bounds = [];
+    if (valid(home?.pt)) { L.marker([home.pt.lat, home.pt.lng], { icon: pin(L, '🏨', true), title: home.name }).addTo(layer).bindPopup(escapeHTML(home.name)); bounds.push([home.pt.lat, home.pt.lng]); }
+    let html = '', total = 0;
+    for (let di = 0; di < days.length; di++) {
+      const date = days[di], color = DAY_COLORS[di % DAY_COLORS.length];
+      const stops = trip.stops.filter(s => s.date === date).sort((a, b) => a.time.localeCompare(b.time));
+      const pts = [];
+      for (const s of stops) {
+        const pt = await pointOf(s, trip, center);
+        if (!valid(pt)) continue;
+        pts.push([pt.lat, pt.lng]); bounds.push([pt.lat, pt.lng]);
+        L.marker([pt.lat, pt.lng], { icon: pin(L, String(di + 1), false, color), title: s.name }).addTo(layer)
+          .bindPopup(`<b>${escapeHTML(s.name)}</b><br>יום ${di + 1} · ${escapeHTML(s.time)}`);
+      }
+      const path = valid(home?.pt) && pts.length ? [[home.pt.lat, home.pt.lng], ...pts, [home.pt.lat, home.pt.lng]] : pts;
+      if (path.length > 1) L.polyline(path, { color, weight: 3, opacity: 0.75 }).addTo(layer);
+      total += stops.length;
+      html += `<li class="map-day-row" data-go-day="${date}"><span style="background:${color}">${di + 1}</span><div><b>יום ${di + 1} · ${escapeHTML(dateLabel(date))}</b><small>${stops.length ? stops.map(s => escapeHTML(s.name)).slice(0, 4).join(' · ') + (stops.length > 4 ? ` ועוד ${stops.length - 4}` : '') : 'אין עדיין מקומות'}</small></div></li>`;
+    }
+    list.innerHTML = html;
+    list.querySelectorAll('[data-go-day]').forEach(li => li.onclick = () => { viewAll = false; selectedDate = li.dataset.goDay; void showDayMap(); });
+    external.hidden = true;
+    if (bounds.length > 1) m.fitBounds(bounds, { padding: [30, 30], maxZoom: 15 });
+    else if (bounds.length === 1) m.setView(bounds[0], 14);
+    else if (center) m.setView([center.lat, center.lng], 12);
+    status.textContent = `${days.length} ימים · ${total} מקומות. כל צבע הוא יום — לחץ על יום ברשימה כדי לראות אותו לבד.`;
   }
 
   async function showDayMap() {
@@ -142,13 +233,17 @@
     try {
       const trip = typeof currentTrip === 'function' ? currentTrip() : null;
       if (!trip) { status.textContent = 'פתח טיול כדי לראות את המסלול על המפה.'; return; }
-      const stops = trip.stops.filter(stop => stop.date === selectedDate).sort((a, b) => a.time.localeCompare(b.time));
-      const mode = $('#mapTravelMode')?.value || 'WALKING';
-      $('#dayMapSubtitle').textContent = `${typeof dateLabel === 'function' ? dateLabel(selectedDate) : selectedDate} · ${trip.city}`;
+      renderDayChips(trip);
+      const modeLabel = $('.map-mode-label');
+      if (modeLabel) modeLabel.hidden = viewAll;
       status.textContent = 'טוען מפה…';
       const L = await loadLeaflet();
       const m = await ensureMap(L);
       const center = await cityCenter(trip);
+      if (viewAll) { await showWholeTrip(trip, L, m, center); return; }
+      const stops = trip.stops.filter(stop => stop.date === selectedDate).sort((a, b) => a.time.localeCompare(b.time));
+      const mode = $('#mapTravelMode')?.value || 'WALKING';
+      $('#dayMapSubtitle').textContent = `${typeof dateLabel === 'function' ? dateLabel(selectedDate) : selectedDate} · ${trip.city}`;
       if (!stops.length) {
         list.replaceChildren();
         external.hidden = true;
@@ -157,14 +252,12 @@
         return;
       }
       status.textContent = 'מאתר את המקומות…';
-      const lodging = trip.travelDetails?.lodgingPoint;
-      const home = valid(lodging) ? { name: trip.hotel || 'המלון', pt: { lat: Number(lodging.lat), lng: Number(lodging.lng) }, home: true }
-        : trip.hotel ? { name: trip.hotel, pt: await geocode(`${trip.hotel} ${trip.city}`, center), home: true } : null;
+      const plan = plannedLegs(trip, selectedDate);
+      const home = await homeOf(trip, center);
       const points = [];
       for (const stop of stops) points.push({ name: stop.name, stop, pt: await pointOf(stop, trip, center) });
-      const route = [...(home ? [home] : []), ...points, ...(home ? [{ ...home }] : [])];
+      const route = [...(home ? [home] : []), ...points, ...(home ? [{ ...home, back: true }] : [])];
 
-      // Markers and legs
       const bounds = [];
       if (valid(home?.pt)) {
         L.marker([home.pt.lat, home.pt.lng], { icon: pin(L, '🏨', true), title: home.name }).addTo(layer).bindPopup(escapeHTML(home.name));
@@ -177,14 +270,19 @@
         bounds.push([p.pt.lat, p.pt.lng]);
       });
       const legs = [];
-      let totalMin = 0, totalKm = 0;
+      let totalMin = 0, totalKm = 0, fromPlan = 0;
       for (let i = 0; i < route.length - 1; i++) {
         const a = route[i], b = route[i + 1];
-        if (!valid(a.pt) || !valid(b.pt)) { legs.push(null); continue; }
-        const est = legEstimate(a.pt, b.pt, mode);
+        const both = valid(a.pt) && valid(b.pt);
+        // The trip plan wins; the travel-mode menu only fills legs the plan does not describe.
+        const planned = b.back ? plan?.home : b.stop ? plannedFor(plan, b.stop) : null;
+        const street = both ? km(a.pt, b.pt) * 1.3 : 0;
+        let est = planned ? { how: planned.how, min: planned.min, street, planned: true } : both ? legEstimate(a.pt, b.pt, mode) : null;
+        if (!est) { legs.push(null); continue; }
+        if (planned) fromPlan++;
         legs.push({ ...est, from: a, to: b });
-        totalMin += est.min; totalKm += est.street;
-        if (est.min) {
+        totalMin += est.min; totalKm += est.street || 0;
+        if (both && est.min) {
           L.polyline([[a.pt.lat, a.pt.lng], [b.pt.lat, b.pt.lng]], {
             color: est.how === 'walk' ? '#CC2B66' : est.how === 'transit' ? '#3A0F24' : '#7A4A63',
             weight: 4, opacity: 0.85, dashArray: est.how === 'walk' ? '2 8' : null, lineCap: 'round',
@@ -195,11 +293,11 @@
       else if (bounds.length === 1) m.setView(bounds[0], 15);
       else if (center) m.setView([center.lat, center.lng], 12);
 
-      // List: stops with the leg before each one
       const legRow = leg => {
         if (!leg || !leg.min) return '';
         const [icon, word] = HOW[leg.how];
-        return `<li class="map-leg"><span aria-hidden="true">${icon}</span><div><small>${leg.far ? 'רחוק להליכה — ' : ''}${word} · כ-${leg.min} דק' · ${leg.street.toFixed(1)} ק״מ</small><a href="${directionsUrl(trip, leg.from, leg.to, leg.how === 'transit' ? 'TRANSIT' : mode)}" target="_blank" rel="noopener">הוראות ב-Google Maps ↗</a></div></li>`;
+        const gmode = leg.how === 'transit' ? 'TRANSIT' : leg.how === 'car' ? 'DRIVING' : 'WALKING';
+        return `<li class="map-leg"><span aria-hidden="true">${icon}</span><div><small>${leg.planned ? 'לפי התכנון: ' : leg.far ? 'רחוק להליכה — ' : ''}${word} · ${leg.min} דק'${leg.street ? ` · ${leg.street.toFixed(1)} ק״מ` : ''}</small><a href="${directionsUrl(trip, leg.from, leg.to, gmode)}" target="_blank" rel="noopener">הוראות ב-Google Maps ↗</a></div></li>`;
       };
       let html = '';
       const offset = home ? 1 : 0;
@@ -214,11 +312,13 @@
       const located = route.filter(p => valid(p.pt));
       external.hidden = located.length < 2;
       if (located.length >= 2) {
-        external.href = dayRouteUrl(trip, located, mode === 'TRANSIT' ? 'TRANSIT' : mode);
+        external.href = dayRouteUrl(trip, located, mode);
         external.textContent = 'פתיחת כל המסלול ב-Google Maps ↗';
       }
       const missing = points.filter(p => !valid(p.pt)).length;
-      status.textContent = `${points.length} תחנות · כ-${totalKm.toFixed(1)} ק״מ · כ-${totalMin} דק' בדרך (הערכה)` + (missing ? ` · ${missing} מקומות לא נמצאו על המפה` : '');
+      const legCount = legs.filter(Boolean).length;
+      const source = !legCount ? '' : fromPlan === legCount ? ' · זמני הדרך לפי תכנון הטיול' : fromPlan ? ' · חלק מהזמנים לפי התכנון, השאר הערכה' : ' · זמני דרך משוערים';
+      status.textContent = `${points.length} תחנות · כ-${totalKm.toFixed(1)} ק״מ · ${totalMin} דק' בדרך${source}` + (missing ? ` · ${missing} מקומות לא נמצאו על המפה` : '');
     } catch (error) {
       status.textContent = error.message || 'לא ניתן להציג את המפה כרגע.';
     } finally {
@@ -334,6 +434,7 @@
   $('#mapTravelMode')?.addEventListener('change', () => { if ($('.quick[data-panel="mapPanel"]')?.classList.contains('active')) void showDayMap(); });
   document.addEventListener('click', event => {
     if (event.target.closest('.day[data-date]') && $('.quick[data-panel="mapPanel"]')?.classList.contains('active')) {
+      viewAll = false;
       setTimeout(() => { void showDayMap(); }, 0);
     }
   });

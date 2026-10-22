@@ -1,5 +1,20 @@
 (function(){
   'use strict';
+  // The day plan is out of date only when a place was added, removed, renamed or moved — not for notes or map pins.
+  const scheduleKey=list=>JSON.stringify((Array.isArray(list)?list:[]).map(s=>[String(s.id||''),String(s.name||''),String(s.date||''),String(s.time||''),Number(s.duration)||0]));
+  const scheduleStale=trip=>{if(!trip.scheduleStopSnapshot)return true;try{return scheduleKey(JSON.parse(trip.scheduleStopSnapshot))!==scheduleKey(trip.stops);}catch{return true;}};
+  // A place deleted from its own editor leaves free time in the day plan instead of a visit to nowhere.
+  window.TriplySchedule={
+    isFresh:trip=>Boolean(trip?.dailySchedule?.length)&&!scheduleStale(trip),
+    forgetStop(trip,stop,wasFresh){
+      const norm=v=>String(v||'').trim().toLocaleLowerCase();
+      for(const day of trip.dailySchedule||[])for(const block of day.blocks||[]){
+        const hit=block.existingStopId?block.existingStopId===stop.id:(day.date===stop.date&&block.placeName&&norm(block.placeName)===norm(stop.name));
+        if(hit){block.placeName='';delete block.existingStopId;block.activity='זמן חופשי';}
+      }
+      if(wasFresh)trip.scheduleStopSnapshot=JSON.stringify(trip.stops);
+    },
+  };
   const previousRender=renderStops;
   renderStops=()=>{
     previousRender();
@@ -8,7 +23,7 @@
     if(!day)return;
     const list=$('#itineraryList');
     if(!list)return;
-    const stale=trip.scheduleStopSnapshot!==JSON.stringify(trip.stops);
+    const stale=scheduleStale(trip);
     const section=document.createElement('section');
     section.className='full-day-schedule';
     section.setAttribute('aria-label','לוח היום');
@@ -171,8 +186,8 @@
       const synchronizedStops=TripPlanning.synchronizeScheduleStops(proposal.stops,validated);
       if(synchronizedStops.length)proposal=TripPlanning.apply(proposal.trip,synchronizedStops);
       Object.assign(trip,proposal.trip,{dailySchedule:validated,scheduleStopSnapshot:JSON.stringify(proposal.stops)});
-      save();closeModal();renderTrip();toast('לוח היום נשמר וניתן להמשיך לערוך אותו');
-    }catch(error){for(const key of snapshotKeys)trip[key]=before[key];const status=$('#scheduleEditError');if(status)status.textContent=error.message||'לא ניתן לשמור את השינוי';else toast(error.message||'לא ניתן לשמור את השינוי');}
+      save();closeModal();renderTrip();toast('לוח היום נשמר וניתן להמשיך לערוך אותו');return true;
+    }catch(error){for(const key of snapshotKeys)trip[key]=before[key];const status=$('#scheduleEditError');if(status)status.textContent=error.message||'לא ניתן לשמור את השינוי';else toast(error.message||'לא ניתן לשמור את השינוי');return false;}
   }
   function editScheduleBlock(trip,day,index,linkedStopId){
     const original=day.blocks[index];if(!original)return;
@@ -194,7 +209,10 @@
       if(linkId){
         if(!placeName){$('#scheduleEditError').textContent='כדי לשמור אטרקציה במסלול, צריך להשאיר לה שם מקום.';return;}
         const stop=trip.stops.find(item=>item.id===linkId);if(!stop){$('#scheduleEditError').textContent='לא מצאתי את התחנה הזו במסלול. עדכן את הלוח דרך הצ׳אט.';return;}
-        block.existingStopId=stop.id;operations.push({type:'update',id:stop.id,name:placeName,date:day.date,time:block.startTime,duration:end-start,notes:activity});
+        block.existingStopId=stop.id;operations.push({type:'update',id:stop.id,name:placeName,date:day.date,time:block.startTime,duration:end-start});
+        const renamed=stop.name.trim().toLocaleLowerCase()!==placeName.toLocaleLowerCase();
+        if(saveDay(trip,schedule,operations)&&renamed){const moved=trip.stops.find(item=>item.id===stop.id);if(moved&&(moved.lat!==undefined||moved.lng!==undefined)){delete moved.lat;delete moved.lng;delete moved.placeId;save();}}
+        return;
       }else if(placeName){operations.push({type:'add',name:placeName,date:day.date,time:block.startTime,duration:end-start,notes:activity});}
       saveDay(trip,schedule,operations);
     };

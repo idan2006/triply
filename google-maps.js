@@ -428,10 +428,12 @@
     };
     if (old) $('#removeStop').onclick = () => {
       if (!confirm('למחוק את התחנה מהטיול?')) return;
-      const before = trip.stops;
+      const before = trip.stops, beforeSchedule = structuredClone(trip.dailySchedule || []), beforeSnapshot = trip.scheduleStopSnapshot;
+      const fresh = window.TriplySchedule?.isFresh?.(trip);
       trip.stops = trip.stops.filter(stop => stop.id !== old.id);
+      window.TriplySchedule?.forgetStop?.(trip, old, fresh);
       try { save(); closeModal(); renderStops(); }
-      catch { trip.stops = before; toast('השמירה נכשלה.'); }
+      catch { trip.stops = before; trip.dailySchedule = beforeSchedule; trip.scheduleStopSnapshot = beforeSnapshot; toast('השמירה נכשלה.'); }
     };
   }
 

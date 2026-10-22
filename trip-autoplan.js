@@ -237,7 +237,7 @@
       "יש מקומות שחייבים להיכנס?",
       `<textarea id="apMust" rows="2" maxlength="1500" placeholder="למשל: London Eye, Camden Market, מוזיאון הטבע — מופרד בפסיקים או בשורות">${esc(st.mustSee)}</textarea>${
         stops.length
-          ? `<label class="check-row"><input type="checkbox" id="apKeep" ${st.keepStops ? "checked" : ""}> לשמור את ${stops.length} המקומות שכבר במסלול (${esc(stops.slice(0, 4).map((s) => s.name).join(", "))}${stops.length > 4 ? "…" : ""})</label>`
+          ? `<label class="check-row"><input type="checkbox" id="apKeep" ${st.keepStops ? "checked" : ""}> <span>לשמור את ${stops.length} המקומות שכבר במסלול (<bdi>${esc(stops.slice(0, 4).map((s) => s.name).join(", "))}${stops.length > 4 ? "…" : ""}</bdi>)</span></label>`
           : ""
       }`,
       true,

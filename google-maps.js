@@ -315,7 +315,7 @@
         html += legRow(legs[i + offset - 1]);
         html += `<li><span>${i + 1}</span><div><b>${escapeHTML(p.name)}</b><small>${escapeHTML(p.stop.time)} · ${Number(p.stop.duration) || 60} דקות${valid(p.pt) ? '' : ' · לא נמצא על המפה'}</small></div></li>`;
       });
-      if (home) html += legRow(legs.at(-1)) + `<li class="map-home"><span aria-hidden="true">🏨</span><div><b>חזרה ל${escapeHTML(home.name)}</b></div></li>`;
+      if (home) html += legRow(legs.at(-1)) + `<li class="map-home"><span aria-hidden="true">🏨</span><div><b>חזרה ל-<bdi>${escapeHTML(home.name)}</bdi></b></div></li>`;
       list.innerHTML = html;
 
       const located = route.filter(p => valid(p.pt));
@@ -364,6 +364,11 @@
     openModal(`<h2>${old ? 'עריכת מקום' : 'הוספת מקום'}</h2><form id="stopForm"><div class="field"><label for="stopName">חיפוש מקום</label><input id="stopName" required maxlength="200" value="${escapeHTML(old?.name || '')}" autocomplete="off" placeholder="התחל לכתוב שם של מקום"><div id="placeSuggestions" class="place-suggestions" role="listbox" aria-label="הצעות למקומות"></div><small>בחר מההצעות כדי שהמקום יופיע על המפה, או המשך עם שם משלך.</small></div><div class="field-grid"><div class="field"><label for="stopDate">יום</label><input id="stopDate" type="date" min="${trip.start}" max="${trip.end}" value="${escapeHTML(old?.date || selectedDate)}" required></div><div class="field"><label for="stopTime">שעה</label><input id="stopTime" type="time" required value="${escapeHTML(old?.time || '09:00')}"></div></div><div class="field"><label for="duration">משך ביקור בדקות</label><input id="duration" type="number" min="5" max="1440" required value="${Number(old?.duration) || 60}"></div><div class="field"><label for="stopNotes">הערות</label><textarea id="stopNotes">${escapeHTML(old?.notes || '')}</textarea></div><button type="button" class="secondary-btn" id="searchMaps">פתיחת המקום ב-Google Maps ↗</button><p id="stopError" role="alert"></p><button class="primary-btn">שמירה</button>${old ? '<button type="button" class="secondary-btn" id="removeStop">מחיקת התחנה</button>' : ''}</form>`);
     const input = $('#stopName');
     const results = $('#placeSuggestions');
+    // A visit that is part of the day plan keeps its day, time and length there (the plan editor moves the rest of the day too).
+    if (old && window.TriplySchedule?.isLinked?.(trip, old)) {
+      for (const sel of ['#stopDate', '#stopTime', '#duration']) $(sel).disabled = true;
+      $('#duration').closest('.field').insertAdjacentHTML('afterend', '<p class="muted">היום, השעה ומשך הביקור נקבעים בלוח היום. כדי לשנות אותם, לוחצים על השורה של המקום בלוח.</p>');
+    }
     input.oninput = () => {
       if (chosen && input.value.trim() !== chosen.name) chosen = null;
       clearTimeout(timer);

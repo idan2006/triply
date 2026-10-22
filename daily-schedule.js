@@ -6,6 +6,11 @@
   // A place deleted from its own editor leaves free time in the day plan instead of a visit to nowhere.
   window.TriplySchedule={
     isFresh:trip=>Boolean(trip?.dailySchedule?.length)&&!scheduleStale(trip),
+    // True when the place is a visit in the day plan, so its day/time/length are edited in the plan itself.
+    isLinked(trip,stop){
+      const norm=v=>String(v||'').trim().toLocaleLowerCase();
+      return Boolean(stop)&&(trip?.dailySchedule||[]).some(day=>(day.blocks||[]).some(block=>block.existingStopId?block.existingStopId===stop.id:(day.date===stop.date&&Boolean(block.placeName)&&norm(block.placeName)===norm(stop.name))));
+    },
     forgetStop(trip,stop,wasFresh){
       const norm=v=>String(v||'').trim().toLocaleLowerCase();
       const isLinked=(day,block)=>block.existingStopId?block.existingStopId===stop.id:(day.date===stop.date&&Boolean(block.placeName)&&norm(block.placeName)===norm(stop.name));

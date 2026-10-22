@@ -174,20 +174,25 @@
     }
     function docFound(kind,x){return kind==='flight'?(x.flights||[]).length>0:(x.hotels||[]).length>0;}
     function applyDocs(){
-      var legs=[],hotels=[],prepaid=[],people=0,dest='';
-      docs.flight.concat(docs.hotel).forEach(function(d){
-        if(d.state!=='ok')return;var x=d.result||{};
-        (x.flights||[]).forEach(function(f){legs.push(f);});
-        (x.hotels||[]).forEach(function(h){hotels.push(h);});
+      var legs=[],hotels=[],prepaid=[],people=0,dest='',skipped=[];
+      var ready=docs.flight.concat(docs.hotel).filter(function(d){return d.state==='ok';});
+      ready.forEach(function(d){((d.result||{}).flights||[]).forEach(function(f){legs.push(f);});});
+      legs.sort(function(a,b){return (a.date+(a.departTime||'')).localeCompare(b.date+(b.departTime||''));});
+      var first=legs[0],last=legs.length>1?legs[legs.length-1]:null;
+      var arrival=first?{date:first.arriveDate||first.date,time:first.arriveTime||'',airport:first.toAirport||''}:(scannedDetails.arrival||{});
+      var departure=last?{date:last.date,time:last.departTime||'',airport:last.fromAirport||''}:(scannedDetails.departure||{});
+      // A hotel stay entirely outside the flight dates belongs to another trip: it is left out, with a warning.
+      var window_=first&&last&&validISO(arrival.date)&&validISO(departure.date);
+      var otherTrip=function(h){return window_&&((validISO(h.checkIn)&&h.checkIn>departure.date)||(validISO(h.checkOut)&&h.checkOut<arrival.date));};
+      ready.forEach(function(d){
+        var x=d.result||{},docHotels=x.hotels||[],away=docHotels.filter(otherTrip);
+        docHotels.forEach(function(h){if(away.indexOf(h)<0)hotels.push(h);else skipped.push(h);});
+        if(!(x.flights||[]).length&&docHotels.length&&away.length===docHotels.length)return;
         (x.prepaidExpenses||[]).forEach(function(p){prepaid.push({name:p.name,amount:p.amount==null?'':String(p.amount),currency:p.currency||'',docId:d.id});});
         if(x.people>people)people=x.people;
         if(!dest&&x.destination)dest=x.destination;
       });
-      legs.sort(function(a,b){return (a.date+(a.departTime||'')).localeCompare(b.date+(b.departTime||''));});
       hotels.sort(function(a,b){return String(a.checkIn).localeCompare(String(b.checkIn));});
-      var first=legs[0],last=legs.length>1?legs[legs.length-1]:null;
-      var arrival=first?{date:first.arriveDate||first.date,time:first.arriveTime||'',airport:first.toAirport||''}:(scannedDetails.arrival||{});
-      var departure=last?{date:last.date,time:last.departTime||'',airport:last.fromAirport||''}:(scannedDetails.departure||{});
       if(!dest&&hotels[0]&&hotels[0].city)dest=hotels[0].city;if(!dest&&first&&first.to)dest=first.to;
       var starts=[],ends=[];
       if(first)starts.push(arrival.date);if(hotels[0]&&hotels[0].checkIn)starts.push(hotels[0].checkIn);
@@ -206,7 +211,8 @@
       if(last)parts.push('המראה חזרה: '+(departure.date||'?')+' '+(departure.time||''));
       if(legs.length>2)parts.push(legs.length+' טיסות בסך הכול');
       if(hotels.length)parts.push(hotels.length===1?'מלון אחד':hotels.length+' מלונות');
-      $('#documentResults').innerHTML=parts.length?'<div class="document-result"><b>מה שמילאתי מהקבצים — אפשר לתקן למטה</b><p>'+escapeHTML(parts.join(' · '))+'</p></div>':'';
+      var warn=skipped.length?'<p class="wizard-error">'+escapeHTML('המלון '+skipped.map(function(h){return h.name||h.city||'';}).filter(Boolean).join(', ')+' לא בתאריכי הטיסות ('+arrival.date+' – '+departure.date+'), ולכן לא נכנס לטיול. אם הקבצים שייכים לטיולים שונים, צור טיול נפרד לכל אחד.')+'</p>':'';
+      $('#documentResults').innerHTML=parts.length||warn?'<div class="document-result"><b>מה שמילאתי מהקבצים — אפשר לתקן למטה</b><p>'+escapeHTML(parts.join(' · '))+'</p>'+warn+'</div>':'';
       showPrepaid();
     }
     renderDocs();

@@ -211,7 +211,7 @@
     }
     renderDocs();
     $('#tripForm').onsubmit=async function(event){
-      event.preventDefault();var button=$('#wizardSave'),error=$('#formError');button.disabled=true;error.textContent='';
+      event.preventDefault();if(step<4){$('#wizardNext').click();return;}var button=$('#wizardSave'),error=$('#formError');button.disabled=true;error.textContent='';
       try{
         checkTripDetails();
         if(!t&&mode!=='documents'&&mode!=='manual')throw Error('חזור ובחר שליחת קבצים או מילוי נתונים');

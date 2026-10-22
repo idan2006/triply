@@ -1,5 +1,5 @@
 /* Triply design refresh (Sep 2026): pink + plum, Secular One headings, simpler home */
-@import url('https://fonts.googleapis.com/css2?family=Secular+One&display=swap');
+
 :root{--ink:#3A0F24;--muted:#7A5566;--pink:#CC2B66;--pink-dark:#A61E50;--pink-soft:#FFE4EE;--lav:#FFF6DB;--line:#F0DDE5;--surface:#fff;--bg:#FBF3F6;--plum:#3A0F24;--plum-2:#52193A;--sun:#FFC23D;--shadow:0 10px 28px rgba(58,15,36,.08);--display:'Secular One',Assistant,Heebo,sans-serif}
 body{background:var(--bg);color:var(--ink)}
 .app-shell{background:var(--bg)}

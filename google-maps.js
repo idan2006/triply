@@ -17,13 +17,13 @@
     leafletPromise = new Promise((resolve, reject) => {
       const css = document.createElement('link');
       css.rel = 'stylesheet';
-      css.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+      css.href = './vendor/leaflet/leaflet.css';
       document.head.append(css);
       const script = document.createElement('script');
-      script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+      script.src = './vendor/leaflet/leaflet.js';
       script.async = true;
       script.onload = () => (window.L ? resolve(window.L) : reject(new Error('המפה לא נטענה.')));
-      script.onerror = () => { leafletPromise = null; reject(new Error('המפה לא נטענה. בדוק את החיבור לאינטרנט ונסה שוב.')); };
+      script.onerror = () => { leafletPromise = null; reject(new Error('המפה לא נטענה. נסה שוב.')); };
       document.head.append(script);
     });
     return leafletPromise;
@@ -112,6 +112,7 @@
   async function ensureMap(L) {
     if (!map) {
       map = L.map('tripDayMap', { zoomControl: true, attributionControl: true }).setView([30, 10], 3);
+      map.attributionControl.setPrefix('<a href="https://leafletjs.com" target="_blank" rel="noopener">Leaflet</a>');
       L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
         maxZoom: 19,
         attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>',
@@ -360,7 +361,7 @@
     let chosen = valid(old) ? { lat: Number(old.lat), lng: Number(old.lng), name: old.name } : null;
     let timer = null;
     let requestId = 0;
-    openModal(`<h2>${old ? 'עריכת מקום' : 'הוספת מקום'}</h2><form id="stopForm"><div class="field"><label for="stopName">חיפוש מקום</label><input id="stopName" required maxlength="200" value="${escapeHTML(old?.name || '')}" autocomplete="off" placeholder="התחל לכתוב שם של מקום"><div id="placeSuggestions" class="place-suggestions" role="listbox" aria-label="הצעות למקומות"></div><small>בחר מההצעות כדי שהמקום יופיע על המפה, או המשך עם שם משלך.</small></div><div class="field-grid"><div class="field"><label for="stopDate">יום</label><input id="stopDate" type="date" min="${trip.start}" max="${trip.end}" value="${old?.date || selectedDate}" required></div><div class="field"><label for="stopTime">שעה</label><input id="stopTime" type="time" required value="${old?.time || '09:00'}"></div></div><div class="field"><label for="duration">משך ביקור בדקות</label><input id="duration" type="number" min="5" max="1440" required value="${old?.duration || 60}"></div><div class="field"><label for="stopNotes">הערות</label><textarea id="stopNotes">${escapeHTML(old?.notes || '')}</textarea></div><button type="button" class="secondary-btn" id="searchMaps">פתיחת המקום ב-Google Maps ↗</button><p id="stopError" role="alert"></p><button class="primary-btn">שמירה</button>${old ? '<button type="button" class="secondary-btn" id="removeStop">מחיקת התחנה</button>' : ''}</form>`);
+    openModal(`<h2>${old ? 'עריכת מקום' : 'הוספת מקום'}</h2><form id="stopForm"><div class="field"><label for="stopName">חיפוש מקום</label><input id="stopName" required maxlength="200" value="${escapeHTML(old?.name || '')}" autocomplete="off" placeholder="התחל לכתוב שם של מקום"><div id="placeSuggestions" class="place-suggestions" role="listbox" aria-label="הצעות למקומות"></div><small>בחר מההצעות כדי שהמקום יופיע על המפה, או המשך עם שם משלך.</small></div><div class="field-grid"><div class="field"><label for="stopDate">יום</label><input id="stopDate" type="date" min="${trip.start}" max="${trip.end}" value="${escapeHTML(old?.date || selectedDate)}" required></div><div class="field"><label for="stopTime">שעה</label><input id="stopTime" type="time" required value="${escapeHTML(old?.time || '09:00')}"></div></div><div class="field"><label for="duration">משך ביקור בדקות</label><input id="duration" type="number" min="5" max="1440" required value="${Number(old?.duration) || 60}"></div><div class="field"><label for="stopNotes">הערות</label><textarea id="stopNotes">${escapeHTML(old?.notes || '')}</textarea></div><button type="button" class="secondary-btn" id="searchMaps">פתיחת המקום ב-Google Maps ↗</button><p id="stopError" role="alert"></p><button class="primary-btn">שמירה</button>${old ? '<button type="button" class="secondary-btn" id="removeStop">מחיקת התחנה</button>' : ''}</form>`);
     const input = $('#stopName');
     const results = $('#placeSuggestions');
     input.oninput = () => {

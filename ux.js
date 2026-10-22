@@ -96,7 +96,7 @@
     const p=await coords(t.city);if(!p)return null;
     const url=`https://api.open-meteo.com/v1/forecast?latitude=${p.lat}&longitude=${p.lng}&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max&timezone=auto&start_date=${from}&end_date=${to}`;
     const r=await fetch(url);if(!r.ok)return null;const j=await r.json();const d=j.daily||{},days={};
-    (d.time||[]).forEach((date,i)=>days[date]={code:d.weather_code[i],max:Math.round(d.temperature_2m_max[i]),min:Math.round(d.temperature_2m_min[i]),rain:d.precipitation_probability_max?.[i]??null});
+    (d.time||[]).forEach((date,i)=>days[date]={code:d.weather_code[i],max:Math.round(d.temperature_2m_max[i]),min:Math.round(d.temperature_2m_min[i]),rain:Number.isFinite(Number(d.precipitation_probability_max?.[i]))&&d.precipitation_probability_max?.[i]!==null?Number(d.precipitation_probability_max[i]):null});
     const out={days};mem.set(key,out);store.set(key,out,3*3600000);return out;
   }
   const kind=c=>c<=1?'sun':c<=3?'cloud':c<=48?'fog':c<=67||(c>=80&&c<=82)?'rain':c<=77||c===85||c===86?'snow':'storm';
@@ -108,11 +108,11 @@
     const t=currentTrip();if(!t)return;const my=++token;
     let wx=null;try{wx=await forecast(t);}catch{}
     if(my!==token||currentTrip()?.id!==t.id)return;
-    $$('.day[data-date]').forEach(b=>{b.querySelector('.wx')?.remove();const w=wx?.days?.[b.dataset.date];if(w)b.insertAdjacentHTML('beforeend',`<span class="wx">${icon(kind(w.code))}${w.max}°</span>`);});
+    $$('.day[data-date]').forEach(b=>{b.querySelector('.wx')?.remove();const w=wx?.days?.[b.dataset.date];if(w)b.insertAdjacentHTML('beforeend',`<span class="wx">${icon(kind(w.code))}${Number(w.max)||0}°</span>`);});
     $('.wx-line')?.remove();
     const title=$('.day-title>div');if(!title)return;
     const w=wx?.days?.[selectedDate];
-    if(w){const k=kind(w.code),wet=(w.rain??0)>=60||k==='rain'||k==='storm'||k==='snow';title.insertAdjacentHTML('beforeend',`<p class="wx-line ${wet?'wet':''}">${icon(k)}<span>${names[k]} · ${w.max}°/${w.min}°${w.rain!=null?` · ${w.rain}% גשם`:''}</span></p>${wet?'<p class="wx-line wx-tip wet">צפוי גשם — כדאי לבקש מהצ׳אט להעביר ליום הזה מוזיאונים ומקומות מקורים.</p>':''}`);}
+    if(w){const k=kind(w.code),wet=(w.rain??0)>=60||k==='rain'||k==='storm'||k==='snow';title.insertAdjacentHTML('beforeend',`<p class="wx-line ${wet?'wet':''}">${icon(k)}<span>${names[k]} · ${Number(w.max)||0}°/${Number(w.min)||0}°${w.rain!=null&&Number.isFinite(Number(w.rain))?` · ${Number(w.rain)}% גשם`:''}</span></p>${wet?'<p class="wx-line wx-tip wet">צפוי גשם — כדאי לבקש מהצ׳אט להעביר ליום הזה מוזיאונים ומקומות מקורים.</p>':''}`);}
     else if(wx?.tooFar)title.insertAdjacentHTML('beforeend','<p class="wx-line">תחזית מזג האוויר תופיע כשבועיים לפני הטיול.</p>');
   }
   const prevTrip=renderTrip;
@@ -155,7 +155,7 @@
   window.importTripsFromFile=async function(){
     const file=await pickFile();if(!file)return;
     if(file.size>20*1024*1024){toast('הקובץ גדול מדי');return;}
-    let data;try{data=JSON.parse(await file.text());}catch{toast('זה לא קובץ גיבוי של Triply (JSON לא תקין)');return;}
+    let data;try{data=JSON.parse(await file.text());}catch{toast('זה לא קובץ גיבוי של Tropi Trip (JSON לא תקין)');return;}
     const list=Array.isArray(data)?data:Array.isArray(data?.trips)?data.trips:null;
     if(!list){toast('לא מצאתי טיולים בקובץ הזה');return;}
     const ok=[];let bad=0;
@@ -175,10 +175,10 @@
   };
   const btn=$('#settingsBtn');
   if(btn&&typeof openSettings==='function'){
-    btn.onclick=()=>{openSettings();const anchor=$('#backupData');if(anchor&&!$('#importBackup')){anchor.insertAdjacentHTML('afterend','<button class="secondary-btn" id="importBackup">ייבוא טיולים מקובץ גיבוי</button><p class="muted import-note">טיולים מהאתר הקודם: שם, בהגדרות, לחץ "הורדת גיבוי טיולים", ואז כאן בחר את הקובץ שירד.</p>');$('#importBackup').onclick=window.importTripsFromFile;}};
+    btn.onclick=()=>{openSettings();const anchor=$('#backupData');if(anchor&&!$('#importBackup')){anchor.insertAdjacentHTML('afterend','<button class="secondary-btn" id="importBackup">ייבוא טיולים מקובץ גיבוי</button><p class="muted import-note">בוחרים קובץ גיבוי שהורד מהאפליקציה (הגדרות ← הורדת גיבוי טיולים).</p>');$('#importBackup').onclick=window.importTripsFromFile;}};
   }
   // Empty home: offer import next to "new trip".
   const prev=renderTrips;
-  renderTrips=()=>{prev();if(!state.trips.length){const g=$('#tripGrid');if(g&&!g.querySelector('#emptyImport'))g.insertAdjacentHTML('beforeend','<button type="button" class="text-btn" id="emptyImport">יש לך טיולים מהאתר הקודם? ייבוא מקובץ גיבוי</button>');const b=$('#emptyImport');if(b)b.onclick=window.importTripsFromFile;}};
+  renderTrips=()=>{prev();if(!state.trips.length){const g=$('#tripGrid');if(g&&!g.querySelector('#emptyImport'))g.insertAdjacentHTML('beforeend','<button type="button" class="text-btn" id="emptyImport">יש לך קובץ גיבוי? ייבוא טיולים</button>');const b=$('#emptyImport');if(b)b.onclick=window.importTripsFromFile;}};
   renderTrips();
 })();

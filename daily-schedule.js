@@ -26,7 +26,7 @@
       <p class="schedule-caveat">גוררים שורה בעזרת הנקודות שבצד כדי להקדים או לאחר אותה, או אל יום אחר בשורת הימים. לחיצה על שורה פותחת עריכה. זמני הליכה ושעות פתיחה הם הערכה.</p>`;
     section.querySelector('#editDayTimes').onclick=()=>editDayTimes(trip,day);
     section.querySelectorAll('[data-edit-schedule]').forEach(button=>button.onclick=()=>editScheduleBlock(trip,day,Number(button.dataset.editSchedule)));
-    section.querySelectorAll('[data-edit-stop-row]').forEach(button=>button.onclick=()=>(window.editStop||editStop)(button.dataset.editStopRow));
+    section.querySelectorAll('[data-edit-stop-row]').forEach(button=>button.onclick=()=>editScheduleBlock(trip,day,Number(button.closest('li').dataset.idx),button.dataset.editStopRow));
     // Attractions already shown in the timeline are not listed a second time.
     list.querySelectorAll('.stop').forEach(row=>{const id=row.querySelector('[data-edit-stop]')?.dataset.editStop;if(id&&linked.has(id))row.remove();});
     const extra=list.querySelectorAll('.stop').length;
@@ -174,20 +174,26 @@
       save();closeModal();renderTrip();toast('לוח היום נשמר וניתן להמשיך לערוך אותו');
     }catch(error){for(const key of snapshotKeys)trip[key]=before[key];const status=$('#scheduleEditError');if(status)status.textContent=error.message||'לא ניתן לשמור את השינוי';else toast(error.message||'לא ניתן לשמור את השינוי');}
   }
-  function editScheduleBlock(trip,day,index){
+  function editScheduleBlock(trip,day,index,linkedStopId){
     const original=day.blocks[index];if(!original)return;
-    openModal(`<h2>עריכת מקטע בלוח</h2><form id="scheduleBlockForm"><div class="field"><label for="scheduleActivity">מה עושים?</label><input id="scheduleActivity" maxlength="240" required value="${escapeHTML(original.activity)}"></div><div class="field"><label for="schedulePlace">שם המקום (אם זה ביקור באטרקציה)</label><input id="schedulePlace" maxlength="160" value="${escapeHTML(original.placeName)}" placeholder="למשל: London Eye"><small>מקום שתוסיף כאן יופיע גם ברשימת האטרקציות ויישאר ניתן לעריכה.</small></div><div class="field-grid"><div class="field"><label for="scheduleStart">התחלה</label><input id="scheduleStart" type="time" required value="${escapeHTML(original.startTime)}"></div><div class="field"><label for="scheduleEnd">סיום</label><input id="scheduleEnd" type="time" required value="${escapeHTML(original.endTime)}"></div></div><p id="scheduleEditError" role="alert"></p><button class="primary-btn">שמירת המקטע</button></form>`);
+    const linkId=original.existingStopId||(trip.stops.some(item=>item.id===linkedStopId)?linkedStopId:'');
+    openModal(`<h2>עריכת מקטע בלוח</h2><form id="scheduleBlockForm"><div class="field"><label for="scheduleActivity">מה עושים?</label><input id="scheduleActivity" maxlength="240" required value="${escapeHTML(original.activity)}"></div><div class="field"><label for="schedulePlace">שם המקום (אם זה ביקור באטרקציה)</label><input id="schedulePlace" maxlength="160" value="${escapeHTML(original.placeName)}" placeholder="למשל: London Eye"><small>מקום שתוסיף כאן יופיע גם ברשימת האטרקציות ויישאר ניתן לעריכה.</small></div><div class="field-grid"><div class="field"><label for="scheduleStart">התחלה</label><input id="scheduleStart" type="time" required value="${escapeHTML(original.startTime)}"></div><div class="field"><label for="scheduleEnd">סיום</label><input id="scheduleEnd" type="time" required value="${escapeHTML(original.endTime)}"></div></div><p id="scheduleEditError" role="alert"></p><button class="primary-btn">שמירת המקטע</button>${linkId?'<button type="button" class="secondary-btn" id="scheduleStopDetails">פרטי המקום: מפה, הערות ומחיקה</button>':''}</form>`);
+    $('#scheduleStopDetails')?.addEventListener('click',()=>{closeModal();(window.editStop||editStop)(linkId);});
     $('#scheduleBlockForm').onsubmit=event=>{
       event.preventDefault();const schedule=structuredClone(trip.dailySchedule),editedDay=schedule.find(item=>item.date===day.date),block=editedDay?.blocks[index],start=minute($('#scheduleStart').value),end=minute($('#scheduleEnd').value),activity=$('#scheduleActivity').value.trim(),placeName=$('#schedulePlace').value.trim();
       if(!block||start===null||end===null||end<=start||!activity){$('#scheduleEditError').textContent='בדוק את הפעילות ואת שעות ההתחלה והסיום.';return;}
       const oldEnd=minute(block.endTime),delta=end-oldEnd;block.startTime=$('#scheduleStart').value;block.endTime=$('#scheduleEnd').value;block.activity=activity;block.placeName=placeName;
       if(index===0)editedDay.wakeTime=block.startTime;else editedDay.blocks[index-1].endTime=block.startTime;
       for(let i=index+1;i<editedDay.blocks.length;i++){const nextStart=minute(editedDay.blocks[i].startTime),nextEnd=minute(editedDay.blocks[i].endTime);editedDay.blocks[i].startTime=clock(nextStart+delta);editedDay.blocks[i].endTime=clock(nextEnd+delta);}
-      editedDay.sleepTime=clock(minute(editedDay.sleepTime)+delta);
+      const bed=minute(day.sleepTime)+delta;
+      if(bed<=1439)editedDay.sleepTime=clock(bed);
+      else{const last=editedDay.blocks.at(-1),lastStart=Number(String(last.startTime).split(':')[0])*60+Number(String(last.startTime).split(':')[1]);
+        if(index===editedDay.blocks.length-1||!(lastStart<1439)){$('#scheduleEditError').textContent='אין מספיק זמן ביום. קצר מקטע אחר או הקדם את שעת הקימה.';return;}
+        last.endTime='23:59';editedDay.sleepTime='23:59';}
       const operations=[];
-      if(original.existingStopId){
+      if(linkId){
         if(!placeName){$('#scheduleEditError').textContent='כדי לשמור אטרקציה במסלול, צריך להשאיר לה שם מקום.';return;}
-        const stop=trip.stops.find(item=>item.id===original.existingStopId);if(!stop){$('#scheduleEditError').textContent='לא מצאתי את התחנה הזו במסלול. עדכן את הלוח דרך הצ׳אט.';return;}
+        const stop=trip.stops.find(item=>item.id===linkId);if(!stop){$('#scheduleEditError').textContent='לא מצאתי את התחנה הזו במסלול. עדכן את הלוח דרך הצ׳אט.';return;}
         block.existingStopId=stop.id;operations.push({type:'update',id:stop.id,name:placeName,date:day.date,time:block.startTime,duration:end-start,notes:activity});
       }else if(placeName){operations.push({type:'add',name:placeName,date:day.date,time:block.startTime,duration:end-start,notes:activity});}
       saveDay(trip,schedule,operations);
@@ -196,9 +202,9 @@
   function editDayTimes(trip,day){
     openModal(`<h2>שעת קימה ושינה</h2><form id="dayTimesForm"><div class="field-grid"><div class="field"><label for="dayWake">קימה</label><input id="dayWake" type="time" required value="${escapeHTML(day.wakeTime)}"></div><div class="field"><label for="daySleep">שינה</label><input id="daySleep" type="time" required value="${escapeHTML(day.sleepTime)}"></div></div><p id="scheduleEditError" role="alert"></p><button class="primary-btn">שמירה</button></form>`);
     $('#dayTimesForm').onsubmit=event=>{
-      event.preventDefault();const schedule=structuredClone(trip.dailySchedule),editedDay=schedule.find(item=>item.date===day.date),wake=minute($('#dayWake').value),sleep=minute($('#daySleep').value),oldWake=minute(editedDay.wakeTime),oldSleep=minute(editedDay.sleepTime);
+      event.preventDefault();const schedule=structuredClone(trip.dailySchedule),editedDay=schedule.find(item=>item.date===day.date),wake=minute($('#dayWake').value),sleep=minute($('#daySleep').value),oldWake=minute(editedDay.wakeTime);
       if(wake===null||sleep===null||sleep<=wake){$('#scheduleEditError').textContent='שעת השינה חייבת להיות אחרי שעת הקימה.';return;}
-      const shift=wake-oldWake;editedDay.wakeTime=clock(wake);for(const block of editedDay.blocks){block.startTime=clock(minute(block.startTime)+shift);block.endTime=clock(minute(block.endTime)+shift);}const last=editedDay.blocks.at(-1),lastEnd=minute(last.endTime),sleepDelta=sleep-(oldSleep+shift);last.endTime=clock(lastEnd+sleepDelta);editedDay.sleepTime=clock(sleep);
+      const shift=wake-oldWake;editedDay.wakeTime=clock(wake);const spans=editedDay.blocks.map(b=>[minute(b.startTime)+shift,minute(b.endTime)+shift]);if(spans.length)spans.at(-1)[1]=sleep;if(spans.some(([a,b])=>b<=a||b>1439)){$('#scheduleEditError').textContent='אין מספיק זמן בסוף היום לשינוי הזה. קצר מקטע או הזז גם את שעת השינה.';return;}editedDay.blocks.forEach((b,i)=>{b.startTime=clock(spans[i][0]);b.endTime=clock(spans[i][1]);});editedDay.sleepTime=clock(sleep);
       saveDay(trip,schedule,[]);
     };
   }

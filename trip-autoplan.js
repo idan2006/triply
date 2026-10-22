@@ -136,12 +136,14 @@
       localStorage.setItem(profileStorageKey("preferences"), JSON.stringify(preferences));
     } catch {}
   }
+  // All AI calls of one plan (one per city) share a group id, so the server counts them as one plan.
+  let planGroup = null;
   async function suggestCall(payload) {
     const session = await aiSession();
     const response = await fetch(AI_SUPABASE_URL + "/functions/v1/trip-planner", {
       method: "POST",
       headers: { apikey: AI_PUBLIC_KEY, Authorization: "Bearer " + session.access_token, "Content-Type": "application/json" },
-      body: JSON.stringify({ mode: "suggest", ...payload }),
+      body: JSON.stringify({ mode: "suggest", planGroup, ...payload }),
       signal: AbortSignal.timeout(150000),
     });
     const data = await response.json().catch(() => ({}));
@@ -561,6 +563,7 @@
   }
 
   async function buildPlan(trip, st, onStep) {
+    planGroup = crypto.randomUUID();
     const stops = st.keepStops ? trip.stops || [] : [];
     const mustSee = splitList(st.mustSee);
     let data, attractions, home, result;
@@ -665,7 +668,7 @@
       <p class="muted">נקודת יציאה: ${esc(plan.lodgingName)}. ארוחות מופיעות כהפסקות באזור (בלי המלצות מסעדות, אלא אם תבקש). זמני ההליכה והנסיעה הם הערכה${verifiedHours ? `. שעות הפתיחה של ${verifiedHours} מקומות נבדקו מול OpenStreetMap; לשאר זו הערכה` : " ושעות הפתיחה הם הערכה"} — כדאי לבדוק לפני היציאה.</p>
       ${reqOk}
       ${result.warnings.map((w) => `<p class="ap-warn">⚠ ${esc(w)}</p>`).join("")}
-      ${plan.removed.length ? `<p class="ap-warn">יוסרו מהמסלול (לפי הבחירה שלך): ${esc(plan.removed.join(", "))}</p>` : ""}
+      ${plan.removed.length ? `<p class="ap-warn">${st.keepStops ? "לא נכנסו ללוח ויוסרו מהמסלול" : "יוסרו מהמסלול (לפי הבחירה שלך)"}: ${esc(plan.removed.join(", "))}</p>` : ""}
       ${fillers ? `<p class="ap-warn">בחלק מהימים נשאר זמן חופשי כי נגמרו הצעות באזור. אפשר ללחוץ "תכנן מחדש" או לבקש בצ'אט להוסיף מקומות.</p>` : ""}
       </div>
       ${days}

@@ -14,4 +14,4 @@ function newTrip(){}
 $$('[data-view]').forEach(b=>b.onclick=()=>showView(b.dataset.view));
 $$('.quick').forEach(b=>b.onclick=()=>{$$('.quick').forEach(x=>{x.classList.toggle('active',x===b);x.setAttribute('aria-pressed',String(x===b));});$$('.panel').forEach(p=>p.classList.toggle('active-panel',p.id===b.dataset.panel));});
 $('#modalBackdrop').onclick=e=>{if(e.target.id==='modalBackdrop')closeModal();};
-if('serviceWorker' in navigator)navigator.serviceWorker.register('./sw.js').catch(()=>toast('שמירה לשימוש ללא אינטרנט אינה זמינה כרגע'));
+if('serviceWorker' in navigator&&!(window.Capacitor&&window.Capacitor.isNativePlatform&&window.Capacitor.isNativePlatform()))navigator.serviceWorker.register('./sw.js').catch(()=>toast('שמירה לשימוש ללא אינטרנט אינה זמינה כרגע'));

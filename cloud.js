@@ -4,14 +4,14 @@
   'use strict';
   const URL_BASE='https://pjkvfcvqibwcxordyxfv.supabase.co/rest/v1';
   const KEY=typeof AUTH_PUBLIC_KEY==='string'?AUTH_PUBLIC_KEY:'';
-  let uid=null,token=null,known={},timer=null,busy=false,again=false,available=true,started=false;
+  let uid=null,token=null,known={},timer=null,busy=false,again=false,available=true,started=false,gen=0;
   const syncKey=()=>'triply:sync:'+uid;
   const hash=s=>{let h=5381;for(let i=0;i<s.length;i++)h=(h*33^s.charCodeAt(i))>>>0;return h.toString(36)+':'+s.length;};
   const tripHash=t=>hash(JSON.stringify(t));
   const loadKnown=()=>{try{known=JSON.parse(localStorage.getItem(syncKey())||'{}')||{};}catch{known={};}};
   const saveKnown=()=>{try{localStorage.setItem(syncKey(),JSON.stringify(known));}catch{}};
   const status=text=>{const el=$('#storageStatus');if(el)el.textContent=text;};
-  async function session(){const s=await window.triplyAuth?.getSession?.();if(s?.access_token)token=s.access_token;return token;}
+  async function session(){const s=await window.triplyAuth?.getSession?.();token=s?.access_token||null;if(!token)throw Object.assign(Error('signed out'),{status:401});return token;}
   async function api(path,{method='GET',body,prefer}={}){
     await session();
     const headers={apikey:KEY,Authorization:'Bearer '+token,'Content-Type':'application/json'};
@@ -23,8 +23,9 @@
   }
   const localSave=()=>{try{localStorage.setItem(storeKey,JSON.stringify(state.trips));}catch{}};
 
-  async function pull(){
+  async function pull(g){
     const rows=await api('/trip_docs?select=id,data,updated_at,deleted,owner_id,share_code');
+    if(g!==gen)return;
     const seen=new Set();let changed=false,notes=[];
     for(const row of rows||[]){
       seen.add(row.id);
@@ -48,8 +49,10 @@
     if(changed){localSave();renderTrips();if(typeof activeId!=='undefined'&&activeId){if(currentTrip())renderTrip();else showView('homeView');}}
     if(notes.length)toast(notes[0]);
   }
-  async function push(){
-    for(const t of state.trips){
+  async function push(g){
+    const trips=state.trips;
+    for(const t of trips){
+      if(g!==gen)return;
       const k=known[t.id],h=tripHash(t);
       if(k&&k.h===h)continue;
       if(k){const r=await api('/trip_docs?id=eq.'+encodeURIComponent(t.id),{method:'PATCH',body:{data:t,deleted:false},prefer:'return=representation'});
@@ -58,8 +61,10 @@
         catch(e){if(e.code==='23505'){const r=await api('/trip_docs?id=eq.'+encodeURIComponent(t.id),{method:'PATCH',body:{data:t,deleted:false},prefer:'return=representation'});if(r?.[0])known[t.id]={at:r[0].updated_at,h,owner:false,code:''};}else throw e;}}
       saveKnown();
     }
-    const ids=new Set(state.trips.map(t=>t.id));
+    if(g!==gen)return;
+    const ids=new Set(trips.map(t=>t.id));
     for(const [id,k] of Object.entries(known))if(!ids.has(id)){
+      if(g!==gen)return;
       if(k.owner)await api('/trip_docs?id=eq.'+encodeURIComponent(id),{method:'PATCH',body:{deleted:true}});
       else await api('/trip_doc_members?trip_id=eq.'+encodeURIComponent(id)+'&user_id=eq.'+uid,{method:'DELETE'});
       delete known[id];saveKnown();
@@ -68,17 +73,19 @@
   async function sync(kind='both'){
     if(!uid||!available)return;
     if(busy){again=true;return;}
-    busy=true;status('שומר בענן…');
+    busy=true;status('שומר בענן…');const g=gen;
     try{
       if(!navigator.onLine)throw Object.assign(Error('offline'),{offline:true});
-      if(kind!=='push')await pull();
-      await push();
+      if(kind!=='push')await pull(g);
+      await push(g);
+      if(g!==gen)return;
       status('נשמר בענן');
       window.dispatchEvent(new CustomEvent('triply:cloud-ok'));
     }catch(e){
+      if(g!==gen)return;
       if(e.status===404||e.code==='42P01'||e.code==='PGRST205'){available=false;status('שמירה במכשיר זה');}
       else status(e.offline||!navigator.onLine?'אין חיבור — יישמר כשיחזור':'השמירה בענן נכשלה, ננסה שוב');
-    }finally{busy=false;if(again){again=false;setTimeout(()=>sync('push'),300);}}
+    }finally{busy=false;if(again&&uid){again=false;setTimeout(()=>sync('push'),300);}}
   }
   const schedule=()=>{clearTimeout(timer);timer=setTimeout(()=>sync('push'),1200);};
 
@@ -90,7 +97,7 @@
     let code=null;try{code=sessionStorage.getItem('triply:join');}catch{}
     if(!code||!uid)return;
     try{sessionStorage.removeItem('triply:join');}catch{}
-    try{const id=await api('/rpc/triply_join',{method:'POST',body:{p_code:code}});await pull();if(id&&state.trips.some(t=>t.id===id)){selectTrip(id);toast('הצטרפת לטיול! עכשיו שניכם רואים ועורכים אותו.');}}
+    try{const id=await api('/rpc/triply_join',{method:'POST',body:{p_code:code}});await pull(gen);if(id&&state.trips.some(t=>t.id===id)){selectTrip(id);toast('הצטרפת לטיול! עכשיו שניכם רואים ועורכים אותו.');}}
     catch(e){toast(/invite not found/.test(e.message)?'קישור ההזמנה לא תקף (אולי בוטל).':'לא הצלחתי להצטרף לטיול. נסה שוב.');}
   }
   try{const u=new URL(location.href),code=u.searchParams.get('join');if(code&&/^[A-Za-z0-9]{10,32}$/.test(code)){sessionStorage.setItem('triply:join',code);u.searchParams.delete('join');history.replaceState(null,'',u.pathname+u.search+u.hash);}}catch{}
@@ -105,12 +112,14 @@
       window.addEventListener('online',()=>sync());
     }
   }
+  // Sign-out: stop syncing at once, so nothing is sent with the old session.
+  window.addEventListener('triply:signed-out',()=>{gen++;uid=null;token=null;known={};again=false;clearTimeout(timer);});
   const prevActivate=activateSession;
   activateSession=function(s){prevActivate.apply(this,arguments);start(s?.user);if(uid&&available)status('נשמר בענן');};
   if(typeof currentUser!=='undefined'&&currentUser)start(currentUser);
 
   // ---- Sharing panel ("חברים") ----
-  const inviteLink=code=>{const u=new URL(location.href);u.search='';u.hash='';u.searchParams.set('join',code);return u.toString();};
+  const inviteLink=code=>{const u=new URL(IS_NATIVE?WEB_APP_URL:location.href);u.search='';u.hash='';u.searchParams.set('join',code);return u.toString();};
   const newCode=()=>{const a=new Uint8Array(12);crypto.getRandomValues(a);return [...a].map(x=>'abcdefghijkmnpqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789'[x%56]).join('');};
   async function renderMembers(){
     const panel=$('#membersPanel'),t=currentTrip();if(!panel||!t)return;
@@ -129,9 +138,9 @@
     }else{
       panel.innerHTML=`<div class="share-card"><h2>טיול משותף</h2><p>הוזמנת לטיול הזה. שינויים שלך מתעדכנים אצל כל המשתתפים.</p><h3>מי בטיול</h3>${list}<button type="button" class="secondary-btn" id="leaveTrip">יציאה מהטיול</button></div>`;
     }
-    $('#makeInvite')?.addEventListener('click',async()=>{try{const code=newCode();await api('/trip_docs?id=eq.'+encodeURIComponent(t.id),{method:'PATCH',body:{share_code:code}});known[t.id].code=code;saveKnown();renderMembers();}catch{toast('לא הצלחתי ליצור קישור. נסה שוב.');}});
-    $('#revokeInvite')?.addEventListener('click',async()=>{if(!confirm('לבטל את קישור ההזמנה? מי שכבר הצטרף יישאר בטיול.'))return;try{await api('/trip_docs?id=eq.'+encodeURIComponent(t.id),{method:'PATCH',body:{share_code:null}});known[t.id].code='';saveKnown();renderMembers();}catch{toast('הביטול נכשל');}});
-    $('#shareInvite')?.addEventListener('click',async()=>{const link=inviteLink(known[t.id].code),text=`בוא/י להצטרף לטיול ${t.city} שלי ב-Triply`;if(navigator.share){try{await navigator.share({title:'Triply',text,url:link});return;}catch{}}try{await navigator.clipboard.writeText(link);toast('הקישור הועתק — אפשר להדביק בוואטסאפ');}catch{$('.share-link input')?.select();toast('סמן והעתק את הקישור');}});
+    $('#makeInvite')?.addEventListener('click',async()=>{try{const code=newCode();const r=await api('/trip_docs?id=eq.'+encodeURIComponent(t.id),{method:'PATCH',body:{share_code:code},prefer:'return=representation'});known[t.id].code=code;if(r?.[0]?.updated_at)known[t.id].at=r[0].updated_at;saveKnown();renderMembers();}catch{toast('לא הצלחתי ליצור קישור. נסה שוב.');}});
+    $('#revokeInvite')?.addEventListener('click',async()=>{if(!confirm('לבטל את קישור ההזמנה? מי שכבר הצטרף יישאר בטיול.'))return;try{const r=await api('/trip_docs?id=eq.'+encodeURIComponent(t.id),{method:'PATCH',body:{share_code:null},prefer:'return=representation'});known[t.id].code='';if(r?.[0]?.updated_at)known[t.id].at=r[0].updated_at;saveKnown();renderMembers();}catch{toast('הביטול נכשל');}});
+    $('#shareInvite')?.addEventListener('click',async()=>{const link=inviteLink(known[t.id].code),text=`בוא/י להצטרף לטיול ${t.city} שלי ב-Tropi Trip`;if(IS_NATIVE){try{await capPlugin('Share').share({title:'Tropi Trip',text,url:link,dialogTitle:'שליחת קישור הזמנה'});return;}catch{}}else if(navigator.share){try{await navigator.share({title:'Tropi Trip',text,url:link});return;}catch{}}try{await navigator.clipboard.writeText(link);toast('הקישור הועתק — אפשר להדביק בוואטסאפ');}catch{$('.share-link input')?.select();toast('סמן והעתק את הקישור');}});
     $$('[data-remove-member]').forEach(b=>b.onclick=async()=>{if(!confirm('להסיר את החבר/ה מהטיול?'))return;try{await api('/trip_doc_members?trip_id=eq.'+encodeURIComponent(t.id)+'&user_id=eq.'+b.dataset.removeMember,{method:'DELETE'});renderMembers();}catch{toast('ההסרה נכשלה');}});
     $('#leaveTrip')?.addEventListener('click',async()=>{if(!confirm('לצאת מהטיול? הוא יוסר מהרשימה שלך.'))return;state.trips=state.trips.filter(x=>x.id!==t.id);localSave();try{await api('/trip_doc_members?trip_id=eq.'+encodeURIComponent(t.id)+'&user_id=eq.'+uid,{method:'DELETE'});}catch{}delete known[t.id];saveKnown();renderTrips();showView('homeView');toast('יצאת מהטיול');});
   }

@@ -8,9 +8,19 @@
     isFresh:trip=>Boolean(trip?.dailySchedule?.length)&&!scheduleStale(trip),
     forgetStop(trip,stop,wasFresh){
       const norm=v=>String(v||'').trim().toLocaleLowerCase();
-      for(const day of trip.dailySchedule||[])for(const block of day.blocks||[]){
-        const hit=block.existingStopId?block.existingStopId===stop.id:(day.date===stop.date&&block.placeName&&norm(block.placeName)===norm(stop.name));
-        if(hit){block.placeName='';delete block.existingStopId;block.activity='זמן חופשי';}
+      const isLinked=(day,block)=>block.existingStopId?block.existingStopId===stop.id:(day.date===stop.date&&Boolean(block.placeName)&&norm(block.placeName)===norm(stop.name));
+      for(const day of trip.dailySchedule||[]){
+        const blocks=day.blocks||[];
+        if(!blocks.some(block=>isLinked(day,block)))continue;
+        // Names this visit appears under in the plan (the place name and the visit title), so the walk or ride to it goes too.
+        const names=new Set([norm(stop.name)]);
+        for(const block of blocks)if(isLinked(day,block))names.add(norm(String(block.activity||'').replace(/^ביקור:\s*/,'')));
+        names.delete('');
+        for(const block of blocks){
+          const leg=!block.placeName&&/הליכה|נסיעה|תחבורה|מונית/.test(block.activity||'')&&[...names].some(n=>norm(block.activity).includes(n));
+          if(isLinked(day,block)||leg){block.placeName='';delete block.existingStopId;block.activity='זמן חופשי';}
+        }
+        day.blocks=blocks.reduce((out,block)=>{const prev=out.at(-1);if(prev&&!prev.placeName&&!block.placeName&&prev.activity==='זמן חופשי'&&block.activity==='זמן חופשי'&&prev.endTime===block.startTime)prev.endTime=block.endTime;else out.push(block);return out;},[]);
       }
       if(wasFresh)trip.scheduleStopSnapshot=JSON.stringify(trip.stops);
     },

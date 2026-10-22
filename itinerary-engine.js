@@ -661,7 +661,7 @@
         if (!placed) {
           used.delete(m);
           warnings.push(`לא נמצא מקום בלוח עבור ${m.nameHe || m.name} בלי לחרוג משעות השינה או שעות הפתיחה. אפשר להוסיף יום או לוותר על מקום אחר.`);
-        } else warnings.push(`קיצרתי את הביקור ב${m.nameHe || m.name} כדי שייכנס ללוח.`);
+        } else warnings.push(`קיצרתי את משך הביקור כדי שייכנס ללוח: ${m.nameHe || m.name}`);
       }
     }
 

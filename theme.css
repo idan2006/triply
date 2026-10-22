@@ -1,5 +1,5 @@
 /* Triply design refresh (Sep 2026): pink + plum, Secular One headings, simpler home */
-@import url('https://fonts.googleapis.com/css2?family=Secular+One&display=swap');
+
 :root{--ink:#3A0F24;--muted:#7A5566;--pink:#CC2B66;--pink-dark:#A61E50;--pink-soft:#FFE4EE;--lav:#FFF6DB;--line:#F0DDE5;--surface:#fff;--bg:#FBF3F6;--plum:#3A0F24;--plum-2:#52193A;--sun:#FFC23D;--shadow:0 10px 28px rgba(58,15,36,.08);--display:'Secular One',Assistant,Heebo,sans-serif}
 body{background:var(--bg);color:var(--ink)}
 .app-shell{background:var(--bg)}
@@ -186,3 +186,12 @@ body{background:var(--bg);color:var(--ink)}
 .map-day[data-map-day="all"]{justify-content:center;font-weight:700;font-size:13.5px}
 .map-stop-list .map-day-row{cursor:pointer}
 .map-stop-list .map-day-row span{color:#fff!important}
+
+/* Polish (Oct 2026): styled small actions, traveler inputs and comfortable tap targets */
+.expense-actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.expense-actions button{min-height:40px;padding:8px 14px;border-radius:12px;border:1px solid #F2A9C5;background:var(--pink-soft);color:var(--pink-dark);font-size:14px;font-weight:700}
+.expense-actions button[data-delete-expense]{background:#fff;color:#a42040;border-color:#f3c2cf}
+.traveler-budget-row input,.prepaid-row input,.prepaid-row select{min-height:48px;padding:10px 12px;border:1px solid var(--line);border-radius:14px;background:#fff;font:inherit}
+.traveler-budget-row input:focus,.prepaid-row input:focus,.prepaid-row select:focus{outline:2px solid #F2A9C5;border-color:var(--pink)}
+#allTripsBtn,[data-remove-member]{min-height:44px;padding:0 10px}
+.map-leg a{display:inline-flex;align-items:center;min-height:36px}

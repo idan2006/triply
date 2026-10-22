@@ -9,7 +9,7 @@ const NATIVE_PLATFORM=IS_NATIVE?window.Capacitor.getPlatform():'web';
 const capPlugin=name=>{const C=window.Capacitor;return C?.Plugins?.[name]||(typeof C?.registerPlugin==='function'?C.registerPlugin(name):null);};
 const WEB_APP_URL='https://idan2006.github.io/triply/';
 const APP_ID='com.tropitrip.app';
-const SUPPORT_EMAIL='iayalon.2006@gmail.com';
+const SUPPORT_EMAIL='tropitrip.support@gmail.com';
 const NATIVE_AUTH_CALLBACK=APP_ID+'://auth-callback';
 const webReturnUrl=()=>IS_NATIVE?WEB_APP_URL:location.origin+location.pathname;
 let authMode='signin',supabaseClient=null,currentUser=null,activeUserId=null;

@@ -54,6 +54,14 @@
     try {
       const res = await R().commit(trip, mutate, opts);
       if (!res.ok) {
+        if (opts.before && trip.dailySchedule?.length) {
+          // The trip details were already saved (dates, flights, hotel) but the plan could not follow: mark it out of
+          // date, so the "update the plan" button shows up once the day is made to fit.
+          trip.scheduleStopSnapshot = "";
+          try {
+            save();
+          } catch {}
+        }
         toast(res.message || "לא ניתן לשמור את השינוי");
         renderTrip();
         return res;
@@ -127,13 +135,13 @@
       })
       .join("");
     section.innerHTML = `<div class="full-day-heading"><h4>לוח היום</h4><button type="button" class="text-btn" id="editDayTimes">קימה ${escapeHTML(day.wakeTime)} · שינה ${escapeHTML(day.sleepTime)} · שינוי</button></div>
-      ${stale ? '<div class="schedule-warning"><p>יש שינויים במקומות שעוד לא נכנסו ללוח.</p><button type="button" class="small-btn" id="syncSchedule">עדכון הלוח וזמני הדרך עכשיו</button></div>' : ""}
+      ${stale ? '<div class="schedule-warning"><p>יש שינויים בטיול שעוד לא נכנסו ללוח.</p><button type="button" class="small-btn" id="syncSchedule">עדכון הלוח וזמני הדרך עכשיו</button></div>' : ""}
       <ol class="schedule-blocks">${rows}</ol>
       <p class="schedule-caveat">גוררים שורה בעזרת הנקודות שבצד כדי להקדים או לאחר אותה, או מקום אל יום אחר בשורת הימים. לחיצה על שורה פותחת עריכה (גם להעברה ליום אחר). זמני ההליכה והנסיעה מחושבים מחדש אחרי כל שינוי; הם ושעות הפתיחה הם הערכה.</p>`;
     section.querySelector("#editDayTimes").onclick = () => editDayTimes(trip, day);
     section
       .querySelector("#syncSchedule")
-      ?.addEventListener("click", () => run(trip, null, { allDates: true }, "הלוח עודכן לפי המקומות"));
+      ?.addEventListener("click", () => run(trip, null, { allDates: true, refresh: true }, "הלוח עודכן לפי הטיול"));
     section
       .querySelectorAll("[data-edit-schedule]")
       .forEach(
@@ -155,8 +163,11 @@
   };
 
   /* ---------- Drag & drop inside the day (and onto another day) ---------- */
+  // `expect`: the row as it was shown — if a sync changed the day meanwhile, the move is refused instead of moving
+  // a different row.
+  const shown = (day, idx) => ({ date: day.date, idx, block: day.blocks[idx] || {} });
   const moveWithinDay = (trip, day, fromIdx, toBeforeIdx) =>
-    run(trip, null, { reorder: [day.date, fromIdx, toBeforeIdx] });
+    run(trip, null, { reorder: [day.date, fromIdx, toBeforeIdx], expect: shown(day, fromIdx) });
   function moveToDay(trip, day, fromIdx, targetDate) {
     const block = day.blocks[fromIdx];
     const stop = block && R().stopForBlock(trip, block, day.date);
@@ -340,7 +351,7 @@
     }
     if (stop) {
       openModal(
-        `<h2>עריכת ביקור</h2><form id="scheduleBlockForm"><div class="field"><label for="schedulePlace">המקום</label><input id="schedulePlace" maxlength="160" required value="${escapeHTML(stop.name)}"></div><div class="field"><label for="scheduleDay">יום</label><select id="scheduleDay">${dayOptions(trip, day.date)}</select></div><div class="field-grid"><div class="field"><label for="scheduleStart">שעת התחלה</label><input id="scheduleStart" type="time" required value="${escapeHTML(original.startTime)}"></div><div class="field"><label for="scheduleLength">משך (דקות)</label><input id="scheduleLength" type="number" inputmode="numeric" min="10" max="600" step="5" required value="${length}"></div></div>${moveButtons}<p class="muted">אחרי השמירה היום מסתדר מחדש: זמני ההליכה והנסיעה מחושבים לפי הסדר החדש.</p><p id="scheduleEditError" role="alert"></p><button class="primary-btn">שמירה</button><button type="button" class="secondary-btn" id="scheduleStopDetails">פרטי המקום: מפה, הערות ומחיקה</button></form>`,
+        `<h2>עריכת ביקור</h2><form id="scheduleBlockForm"><div class="field"><label for="schedulePlace">המקום</label><input id="schedulePlace" maxlength="160" required value="${escapeHTML(stop.name)}"></div><div class="field"><label for="scheduleDay">יום</label><select id="scheduleDay">${dayOptions(trip, day.date)}</select></div><div class="field-grid"><div class="field"><label for="scheduleStart">שעת התחלה</label><input id="scheduleStart" type="time" required value="${escapeHTML(original.startTime)}"></div><div class="field"><label for="scheduleLength">משך (דקות)</label><input id="scheduleLength" type="number" inputmode="numeric" min="5" max="1440" step="5" required value="${length}"></div></div>${moveButtons}<p class="muted">אחרי השמירה היום מסתדר מחדש: זמני ההליכה והנסיעה מחושבים לפי הסדר החדש.</p><p id="scheduleEditError" role="alert"></p><button class="primary-btn">שמירה</button><button type="button" class="secondary-btn" id="scheduleStopDetails">פרטי המקום: מפה, הערות ומחיקה</button></form>`,
       );
       bindSteps();
       $("#scheduleStopDetails").onclick = () => {
@@ -353,8 +364,8 @@
           date = $("#scheduleDay").value,
           start = minute($("#scheduleStart").value),
           len = Math.round(Number($("#scheduleLength").value));
-        if (!name || start === null || !Number.isFinite(len) || len < 10 || len > 600) {
-          $("#scheduleEditError").textContent = "בדוק את שם המקום, השעה והמשך (10–600 דקות).";
+        if (!name || start === null || !Number.isFinite(len) || len < 5 || len > 1440) {
+          $("#scheduleEditError").textContent = "בדוק את שם המקום, השעה והמשך (5–1440 דקות).";
           return;
         }
         const timeChanged = $("#scheduleStart").value !== original.startTime;
@@ -395,7 +406,10 @@
           $("#scheduleEditError").textContent = "שעת הסיום חייבת להיות אחרי ההתחלה.";
           return;
         }
-        const res = await run(trip, null, { transform: (draft) => R().editFixed(draft, day.date, index, s, e) });
+        const res = await run(trip, null, {
+          transform: (draft) => R().editFixed(draft, day.date, index, s, e),
+          expect: shown(day, index),
+        });
         if (!res.ok && $("#scheduleEditError")) $("#scheduleEditError").textContent = res.message || "";
       };
       return;
@@ -438,12 +452,13 @@
               notes: activity !== original.activity ? activity : "",
             });
           },
-          { hints: { [id]: "time" } },
+          { hints: { [id]: "time" }, expect: shown(day, index) },
           "המקום נוסף ללוח",
         );
       } else
         res = await run(trip, null, {
           transform: (draft) => R().retimeItem(draft, day.date, index, { activity, start, dur: len }),
+          expect: shown(day, index),
         });
       if (!res.ok && $("#scheduleEditError")) $("#scheduleEditError").textContent = res.message || "";
     };

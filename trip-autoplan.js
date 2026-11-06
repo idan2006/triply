@@ -1064,6 +1064,11 @@
       trip.travelDetails = { ...(trip.travelDetails || {}) };
       if (plan.lodgingPoints?.length) trip.travelDetails.lodgingPoints = plan.lodgingPoints;
       else delete trip.travelDetails.lodgingPoints;
+      // The city centre the plan was built around: a steady estimate for walks when a hotel is not on the map.
+      const cc = plan.data?.cityCenter;
+      if (!plan.lodgingPoints?.length && cc && Number.isFinite(Number(cc.lat)) && Number.isFinite(Number(cc.lng)))
+        trip.travelDetails.cityPoint = { lat: Number(cc.lat), lng: Number(cc.lng) };
+      else delete trip.travelDetails.cityPoint;
       if (plan.lodgingPoint && Number.isFinite(plan.lodgingPoint.lat))
         trip.travelDetails = {
           ...(trip.travelDetails || {}),

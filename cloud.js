@@ -30,7 +30,18 @@
   const saveKnown = () => {
     try {
       localStorage.setItem(syncKey(), JSON.stringify(known));
-    } catch {}
+    } catch {
+      // Browser storage is full: keep the sync markers, drop the stored base copies (a merge then keeps this
+      // device's version where both sides changed) — never leave stale markers behind.
+      try {
+        const slim = {};
+        for (const [id, k] of Object.entries(known)) {
+          const { b, ...rest } = k;
+          slim[id] = rest;
+        }
+        localStorage.setItem(syncKey(), JSON.stringify(slim));
+      } catch {}
+    }
   };
   const status = (text) => {
     const el = $("#storageStatus");
@@ -65,19 +76,27 @@
     return data;
   }
   /* ---- Both this device and another one changed the same trip before syncing: merge instead of dropping ----
-   * `base` is the last version both sides had (saved with every sync). Per field: whoever changed it wins;
-   * expenses, people and chat messages changed on both sides are merged item by item; the plan (places +
-   * day plan) changed on both sides keeps this device's version. */
+   * `base` is the last version both sides had (saved with every sync). Whoever changed a thing wins; when both
+   * changed the same thing, this device's version is kept (conflict). Expenses, travellers, places and chat
+   * messages are merged item by item, flight / hotel details field by field, the day plan day by day — and the
+   * merged days are then re-timed so they match the merged places. */
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-  function mergeById(base, mine, theirs) {
+  function mergeById(base, mine, theirs, onBoth) {
     const map = (list) => new Map((Array.isArray(list) ? list : []).filter((x) => x && x.id).map((x) => [x.id, x]));
     const B = map(base),
       M = map(mine),
       T = map(theirs);
     const out = [];
     for (const [id, t] of T) {
-      if (M.has(id)) out.push(B.has(id) && same(M.get(id), B.get(id)) ? t : M.get(id));
-      else if (!B.has(id) || !same(t, B.get(id))) out.push(t); // new there, or deleted here but changed there
+      if (M.has(id)) {
+        const m = M.get(id),
+          b = B.get(id);
+        if (same(m, t) || (B.has(id) && same(m, b))) out.push(t);
+        else {
+          out.push(m);
+          if (!B.has(id) || !same(t, b)) onBoth?.();
+        }
+      } else if (!B.has(id) || !same(t, B.get(id))) out.push(t); // new there, or deleted here but changed there
     }
     for (const [id, m] of M) {
       if (T.has(id)) continue;
@@ -85,9 +104,53 @@
     }
     return out;
   }
+  /* Field by field (travel details): keys missing on a side count as deleted there. */
+  function mergeFields(base, mine, theirs, onBoth) {
+    const out = { ...(theirs || {}) };
+    const keys = new Set([...Object.keys(mine || {}), ...Object.keys(theirs || {})]);
+    for (const k of keys) {
+      const m = mine?.[k],
+        t = theirs?.[k],
+        b = base?.[k];
+      if (same(m, t) || (base && same(m, b))) continue; // equal, or changed only there
+      if (base && same(t, b)) {
+        if (m === undefined) delete out[k];
+        else out[k] = m; // changed only here
+        continue;
+      }
+      if (m === undefined) delete out[k];
+      else out[k] = m;
+      onBoth();
+    }
+    return out;
+  }
+  function mergeDays(base, mine, theirs, dates, onBoth) {
+    const map = (list) => new Map((Array.isArray(list) ? list : []).filter((d) => d && d.date).map((d) => [d.date, d]));
+    const B = map(base),
+      M = map(mine),
+      T = map(theirs);
+    const out = [];
+    for (const date of dates) {
+      const m = M.get(date),
+        t = T.get(date),
+        b = B.get(date);
+      if (!m && !t) continue;
+      if (!m || !t) {
+        out.push(m || t);
+        continue;
+      }
+      if (same(m, t) || (b && same(m, b))) out.push(t);
+      else {
+        out.push(m);
+        if (!b || !same(t, b)) onBoth();
+      }
+    }
+    return out;
+  }
   function mergeTrip(base, mine, theirs) {
     const out = { ...theirs };
     let conflict = false;
+    const both = () => (conflict = true);
     const plan = ["stops", "dailySchedule", "scheduleStopSnapshot"];
     const changedHere = (k) => !base || !same(mine[k], base[k]);
     const changedThere = (k) => !base || !same(theirs[k], base[k]);
@@ -99,7 +162,8 @@
         out[k] = mine[k];
         continue;
       }
-      if (k === "expenses" || k === "participants") out[k] = mergeById(base?.[k], mine[k], theirs[k]);
+      if (k === "expenses" || k === "participants") out[k] = mergeById(base?.[k], mine[k], theirs[k], both);
+      else if (k === "travelDetails") out[k] = mergeFields(base?.[k], mine[k], theirs[k], both);
       else if (k === "chat") {
         const seen = new Set((theirs.chat || []).map((x) => JSON.stringify(x)));
         out.chat = [...(theirs.chat || []), ...(mine.chat || []).filter((x) => !seen.has(JSON.stringify(x)))].slice(
@@ -107,14 +171,46 @@
         );
       } else {
         out[k] = mine[k];
-        conflict = true;
+        both();
       }
     }
+    // Travellers added on both devices: keep them all (the model keeps only `people` of them).
+    if (Array.isArray(out.participants) && out.participants.length > Number(out.people || 0))
+      out.people = Math.min(1000, out.participants.length);
     const planHere = plan.some(changedHere),
       planThere = plan.some(changedThere);
     if (planHere && !plan.every((k) => same(mine[k], theirs[k]))) {
-      for (const k of plan) out[k] = mine[k];
-      if (planThere) conflict = true;
+      if (!planThere) for (const k of plan) out[k] = mine[k];
+      else {
+        // Both changed the plan: places one by one, days one by one, then re-time so days and places agree.
+        let dates = [];
+        try {
+          dates = TripModel.dates(out.start, out.end);
+        } catch {}
+        const draft = {
+          ...out,
+          stops: mergeById(base?.stops, mine.stops, theirs.stops, both),
+          dailySchedule: mergeDays(base?.dailySchedule, mine.dailySchedule, theirs.dailySchedule, dates, both),
+          scheduleStopSnapshot: "",
+        };
+        let r = null;
+        try {
+          r = draft.dailySchedule.length && window.TriplyReflow ? window.TriplyReflow.reflow(draft) : null;
+          if (r?.ok && r.trip.dailySchedule?.length)
+            window.TripPlanning?.validateSchedule(r.trip, r.trip.dailySchedule);
+        } catch {
+          r = null;
+        }
+        if (r?.ok) for (const k of plan) out[k] = r.trip[k];
+        else if (!draft.dailySchedule.length) {
+          out.stops = draft.stops;
+          out.dailySchedule = [];
+          out.scheduleStopSnapshot = "";
+        } else {
+          for (const k of plan) out[k] = mine[k]; // could not combine the two plans: this device's plan
+          conflict = true;
+        }
+      }
     }
     try {
       return { trip: TripModel.trip({ ...out, id: mine.id }), conflict };
@@ -202,7 +298,7 @@
           changed = true;
           notes.push(
             merged.conflict
-              ? `"${remote.city}" השתנה גם במכשיר אחר. שילבתי את השינויים; כשהמסלול שונה בשני המקומות, נשמר המסלול מהמכשיר הזה.`
+              ? `"${remote.city}" השתנה גם במכשיר אחר. שילבתי את השינויים; כשאותו דבר השתנה בשני המקומות, נשמרה הגרסה מהמכשיר הזה.`
               : `"${remote.city}" עודכן ממכשיר אחר, והשינויים שלך נשמרו`,
           );
           continue;
@@ -252,30 +348,33 @@
       const k = known[t.id],
         h = tripHash(t);
       if (k && k.h === h) continue;
+      // What is sent now becomes the shared base — an edit made while the request is on its way is not part of it.
+      const sent = JSON.stringify(t),
+        data = JSON.parse(sent);
       if (k) {
         const r = await api("/trip_docs?id=eq." + encodeURIComponent(t.id), {
           method: "PATCH",
-          body: { data: t, deleted: false },
+          body: { data, deleted: false },
           prefer: "return=representation",
         });
-        if (Array.isArray(r) && r[0]) known[t.id] = { ...k, at: r[0].updated_at, h, b: JSON.stringify(t) };
+        if (Array.isArray(r) && r[0]) known[t.id] = { ...k, at: r[0].updated_at, h, b: sent };
         else delete known[t.id];
       } else {
         try {
           const r = await api("/trip_docs", {
             method: "POST",
-            body: { id: t.id, data: t },
+            body: { id: t.id, data },
             prefer: "return=representation",
           });
-          known[t.id] = { at: r?.[0]?.updated_at || "", h, owner: true, code: "", b: JSON.stringify(t) };
+          known[t.id] = { at: r?.[0]?.updated_at || "", h, owner: true, code: "", b: sent };
         } catch (e) {
           if (e.code === "23505") {
             const r = await api("/trip_docs?id=eq." + encodeURIComponent(t.id), {
               method: "PATCH",
-              body: { data: t, deleted: false },
+              body: { data, deleted: false },
               prefer: "return=representation",
             });
-            if (r?.[0]) known[t.id] = { at: r[0].updated_at, h, owner: false, code: "", b: JSON.stringify(t) };
+            if (r?.[0]) known[t.id] = { at: r[0].updated_at, h, owner: false, code: "", b: sent };
           } else throw e;
         }
       }

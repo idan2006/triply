@@ -248,6 +248,15 @@
         }
         return f;
       }
+      // A day after the flight home (the trip was set to end later than the take-off): no sightseeing either.
+      if (depMin !== null && departure.date && date > departure.date) {
+        f.kind = "post-departure";
+        f.start = null;
+        const rest = Math.max(f.wake + 30, f.sleep - 90);
+        f.pre.push([f.wake, rest, "יום אחרי הטיסה הביתה", ""]);
+        f.pre.push([rest, f.sleep, "פריקת מזוודות ומנוחה אחרי הטיסה", ""]);
+        return f;
+      }
       // Default morning.
       let cursor = f.wake;
       if (isArrival) {

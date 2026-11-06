@@ -14,7 +14,9 @@
     const x = Math.max(0, Math.min(1439, Math.round(v)));
     return `${String(Math.floor(x / 60)).padStart(2, "0")}:${String(x % 60).padStart(2, "0")}`;
   };
-  const TRAVEL = /^הליכה|^נסיעה בתחבורה|^נסיעה במונית|^חזרה ללינה/;
+  // Only the exact shapes the planner and this file write ("הליכה אל X (~15 דק')", "חזרה ללינה (הליכה ~10 דק')"),
+  // so a row the traveller wrote himself ("הליכה לאורך התמזה") is never mistaken for a computed leg.
+  const TRAVEL = /^(?:הליכה|נסיעה בתחבורה ציבורית|נסיעה במונית)(?: אל .+)? \(~\d+ דק'\)$|^חזרה ללינה \(.*~\d+ דק'\)$/;
   const WAIT = /^הפסקת קפה ליד .+ עד הפתיחה$/;
   const GAP = /^הפסקה קצרה$/;
   const FIXED = /נחיתה|שדה התעופה|המראה|טיסה|צ'ק-אין|צ'ק-אאוט|אריזה|שינה אחרי|^קימה|איסוף מזוודות|^הגעה ל/;
@@ -53,7 +55,9 @@
     while (t > h && items[t - 1]._role !== "move") t--;
     return {
       head: items.slice(0, h),
-      middle: items.slice(h, t).filter((x) => x._role !== "slack"),
+      // A rest row between activities (e.g. "מנוחה במלון" of an older plan, or one the traveller added) is kept as an
+      // activity; only the evening rest at the end of the day is recomputed.
+      middle: items.slice(h, t).map((x) => (x._role === "slack" ? { ...x, _role: "move" } : x)),
       tail: items.slice(t),
     };
   }
@@ -70,10 +74,19 @@
    * ctx: { home:{lat,lng}|null, pointOf(item) → {lat,lng}|null, openOf(item) → {open,close}|null, pinned(item) → bool,
    *        maxLater: minutes the bedtime may move later when the day is too full (default 0) } */
   function layout(day, middleIn, ctx = {}) {
-    const { head, tail } = split(day);
+    const { head, middle: was, tail } = split(day);
     const wake = toMin(day.wakeTime),
       sleep = toMin(day.sleepTime);
     if (wake === null || sleep === null) return { ok: false, message: "שעת הקימה או השינה של היום לא תקינה." };
+    // A day that is only flights and transfers (the flight day before a night landing, a very early flight home, a late
+    // landing) has no room for visits: refuse instead of putting a place after the plane has left.
+    if (!was.length && !tail.some((b) => b._role === "slack") && middleIn.some((b) => b.placeName))
+      return {
+        ok: false,
+        noRoom: true,
+        message:
+          "ביום הזה אין זמן לביקורים — לפי הטיסות הוא כולו טיסה ונסיעות. בחר יום אחר (ואם הטיסות השתנו, כתוב את השעות החדשות בצ'אט).",
+      };
     const start = head.length ? toMin(head.at(-1).endTime) : wake;
     const tailFixed = tail.find((b) => b._role === "fixed");
     let limit = tailFixed ? toMin(tailFixed.startTime) : sleep;
@@ -186,6 +199,25 @@
         limit = res.t;
         sleepOut = res.t;
         warnings.push(`היום מלא, ולכן שעת השינה זזה ל-${clock(sleepOut)} (במקום ${clock(sleep)})`);
+      }
+    }
+    // An automatic re-time (new hotel or flights — nobody chose it) shortens the longest visits a little instead of
+    // failing; a change the traveller makes gets a clear refusal instead.
+    if (res.t > limit && ctx.squeeze > 0 && res.t - limit <= ctx.squeeze) {
+      let over = res.t - limit;
+      const cut = [];
+      for (const b of items.filter((x) => x.placeName).sort((a, b) => b._dur - a._dur)) {
+        const c = Math.min(over, b._dur - 30);
+        if (c <= 0) continue;
+        b._dur -= c;
+        over -= c;
+        cut.push(`את ${label(b)} ב-${c} דק'`);
+        if (over <= 0) break;
+      }
+      const trial = build(items);
+      if (over <= 0 && trial.t <= limit) {
+        res = trial;
+        warnings.push(`כדי שהכל ייכנס, קיצרתי ${cut.join(" ו")}`);
       }
     }
     if (res.t > limit)

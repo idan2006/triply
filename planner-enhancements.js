@@ -470,7 +470,7 @@
         const compact = compactTrip(t);
         const data = await askPlanner(text, compact, conversation);
         if (!history.isConnected) return;
-        const proposal = await buildProposal(t, data, compact);
+        const proposal = await buildProposal(t, data, compact, text);
         let assistantText = String(data.message || "").trim();
         if (remembered) assistantText += "\n\nשמרתי את ההעדפות האלה לטיולים הבאים במכשיר הזה. אפשר לשנות אותן בהגדרות.";
         if (proposal.error) {
@@ -481,6 +481,8 @@
           assistantText +=
             (assistantText ? "\n\n" : "") +
             "הכנתי הצעה לבדיקה למטה. שום דבר לא נשמר עד שתאשר; אחרי השמירה אפשר להמשיך לערוך הכל.";
+        } else if (proposal.warnings?.length) {
+          assistantText += (assistantText ? "\n\n" : "") + proposal.warnings.join(" ");
         } else if (proposal.ignored) {
           assistantText +=
             (assistantText ? "\n\n" : "") +
@@ -501,8 +503,14 @@
           panel.replaceChildren();
           status.textContent = "ההצעה בוטלה; המסלול נשאר ללא שינוי.";
         };
-        $("#acceptProposal").onclick = () => {
-          const res = window.TriplyReflow.apply(t, proposal.prepared);
+        $("#acceptProposal").onclick = async (ev) => {
+          ev.currentTarget.disabled = true;
+          let res = window.TriplyReflow.apply(t, proposal.prepared);
+          if (!res.ok && res.conflict) {
+            // The trip changed meanwhile (e.g. on another device): the same answer is applied to the new version.
+            const again = await buildProposal(t, data, compact, text);
+            res = again.error ? { ok: false, message: again.error } : window.TriplyReflow.apply(t, again.prepared);
+          }
           if (!res.ok) {
             status.textContent = res.message || "לא ניתן לשמור את השינוי. הטיול הקודם נשמר.";
             panel.replaceChildren();
@@ -545,8 +553,9 @@
   }
 
   /* ---------- What the chat sends: a short summary of the trip, not the whole saved data ---------- */
+  // `\b` does not work with Hebrew letters in JS, so word edges are spelled out (no look-behind: older iPhones).
   const ONE_DAY =
-    /(?:ב|ל)?יום\s+(?:ה?(?:ראשון|שני|שלישי|רביעי|חמישי|שישי|שבת|אחרון)|\d{1,2})|\bמחר\b|\bהיום\b|ב-?\d{1,2}[./]\d{1,2}/;
+    /(?:ב|ל)?יום\s+(?:ה?(?:ראשון|שני|שלישי|רביעי|חמישי|שישי|שבת|אחרון)|\d{1,2})|(?:^|[^\u0590-\u05FF])(?:ל|ו|ב|מ)?(?:מחר|מחרתיים|היום)(?![\u0590-\u05FF])|ב-?\d{1,2}[./]\d{1,2}/;
   function compactTrip(t) {
     const ids = new Map(),
       back = new Map();
@@ -688,8 +697,11 @@
   }
   /* ---------- Turning the answer into a checked proposal (nothing is saved here) ---------- */
   const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
-  async function buildProposal(t, data, c) {
+  async function buildProposal(t, data, c, text = "") {
     if (!data || typeof data !== "object") return { error: "התשובה לא הייתה תקינה.", lines: [], warnings: [] };
+    // "…באותה שעה" / "…ב-14:00": the time the planner gives is kept even when the place also moves to another day.
+    const wantsTime = /\d{1,2}[:.]\d{2}|בשעה|באותה (?:ה)?שעה|באותו (?:ה)?זמן/.test(String(text));
+    const notes = [];
     const ops = Array.isArray(data.operations) ? data.operations.slice(0, 25) : [];
     const dates = TripModel.dates(t.start, t.end);
     const hints = {};
@@ -700,8 +712,18 @@
     const mutate = (draft) => {
       // Trip details, people and expenses keep using the app's own validator.
       const extra = {};
-      if (data.tripChanges && typeof data.tripChanges === "object" && Object.keys(data.tripChanges).length)
-        extra.tripChanges = data.tripChanges;
+      let changes = data.tripChanges && typeof data.tripChanges === "object" ? { ...data.tripChanges } : {};
+      // On a planned trip the destination, dates, travellers and currency are changed in the trip's own form
+      // (here they would wipe the day plan).
+      if (draft.dailySchedule?.length) {
+        const off = ["city", "start", "end", "people", "currency"].filter(
+          (k) => changes[k] !== undefined && JSON.stringify(changes[k]) !== JSON.stringify(draft[k]),
+        );
+        for (const k of ["city", "start", "end", "people", "currency"]) delete changes[k];
+        if (off.length && !notes.length)
+          notes.push('שינוי יעד, תאריכים, מספר נוסעים או מטבע עושים ב"עריכת פרטי הטיול" — לא נכלל בהצעה.');
+      }
+      if (Object.keys(changes).length) extra.tripChanges = changes;
       if (Array.isArray(data.participants) && data.participants.length)
         extra.participants = data.participants.map((p) => ({ ...p, id: c.pback.get(String(p.id || "")) || "" }));
       if (Array.isArray(data.expenseOperations) && data.expenseOperations.length)
@@ -712,6 +734,7 @@
         }));
       if (Object.keys(extra).length) {
         const p = TripPlanning.apply(draft, { operations: [], ...extra });
+        const oldTd = draft.travelDetails || {};
         for (const k of [
           "city",
           "start",
@@ -729,7 +752,18 @@
           "scheduleStopSnapshot",
         ])
           draft[k] = p.trip[k];
-        lines.push(...p.changes);
+        // Flight changes in words ("טיסה הביתה: יום ג׳, 24.11 18:00 ← 17:45"), not the raw saved data.
+        const when = (x) => (x?.date ? window.TriplyReflow.dayShort(x.date) + " " : "") + (x?.time || "");
+        const flight = [];
+        for (const [key, name] of [
+          ["arrival", "נחיתה"],
+          ["departure", "טיסה הביתה"],
+        ]) {
+          const a = oldTd[key] || {},
+            b = draft.travelDetails?.[key] || {};
+          if (a.date !== b.date || a.time !== b.time) flight.push(`${name}: ${when(a) || "—"} ← ${when(b) || "—"}`);
+        }
+        lines.push(...p.changes.flatMap((x) => (/^פרטי טיסה ומלון:/.test(x) ? flight : [x])));
       }
       for (const op of ops) {
         if (!op || !["add", "update", "remove", "move"].includes(op.type)) {
@@ -794,7 +828,7 @@
         if (Number.isFinite(dur) && dur >= 10 && dur <= 600) st.duration = Math.round(dur);
         const dayChanged = newDate !== st.date;
         st.date = newDate;
-        if (newTime && newTime !== st.time) {
+        if (newTime && (newTime !== st.time || (dayChanged && wantsTime))) {
           st.time = newTime;
           hints[id] = "time";
         } else if (dayChanged) hints[id] = "auto";
@@ -830,16 +864,31 @@
     }
     if (prepared.changed?.length)
       lines.push(
-        `הלוח וזמני ההליכה והנסיעה יחושבו מחדש ב${prepared.changed.length === 1 ? "יום " + window.TriplyReflow.dayShort(prepared.changed[0]) : "-" + prepared.changed.length + " ימים"}`,
+        `הלוח וזמני ההליכה והנסיעה יחושבו מחדש ב${prepared.changed.length === 1 ? window.TriplyReflow.dayShort(prepared.changed[0]) : "-" + prepared.changed.length + " ימים"}`,
       );
     const focus = [...touched.keys()]
       .map((id) => prepared.trip.stops.find((s) => s.id === id))
       .filter(Boolean)
       .sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time))[0];
+    // Opening hours of the places this change puts somewhere new.
+    const hours = [];
+    for (const [id, x] of touched) {
+      if (x.kind === "remove") continue;
+      const day = prepared.trip.dailySchedule?.find((d) => d.blocks.some((b) => b.existingStopId === id));
+      const b = day?.blocks.find((y) => y.existingStopId === id);
+      const open = b && window.TriplyDayLayout?.openOf(b, prepared.trip.stops);
+      if (!open) continue;
+      const s0 = window.TriplyDayLayout.toMin(b.startTime),
+        e0 = window.TriplyDayLayout.toMin(b.endTime);
+      if ((open.open !== null && s0 < open.open) || (open.close !== null && e0 > open.close))
+        hours.push(
+          `${b.activity.replace(/^ביקור:\s*/, "")} ב-${b.startTime}–${b.endTime}, אבל הוא פתוח בערך ${window.TriplyDayLayout.clock(open.open ?? 0)}–${open.close === null ? "?" : window.TriplyDayLayout.clock(open.close)}`,
+        );
+    }
     return {
       prepared,
       lines: touched.size || lines.length ? lines : [],
-      warnings: prepared.warnings || [],
+      warnings: [...(prepared.warnings || []), ...hours, ...notes],
       changedDays: prepared.changed?.length || 0,
       focusDate: focus?.date || prepared.changed?.[0] || null,
       ignored: ignored && !touched.size,

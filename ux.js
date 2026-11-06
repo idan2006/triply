@@ -370,11 +370,25 @@
             return;
           }
         const before = structuredClone(t.travelDetails || {}),
-          beforeHotel = t.hotel;
+          beforeHotel = t.hotel,
+          beforeTrip = structuredClone(t);
+        const key = (list) =>
+          JSON.stringify(
+            (list || []).map((h) => [
+              String(h.name || "")
+                .trim()
+                .toLowerCase(),
+              h.city || "",
+              h.checkIn,
+              h.checkOut,
+            ]),
+          );
+        // The same hotels saved again keep their map points (nothing to look up or re-time).
+        const changed = key(rows) !== key(before.hotels) || (rows[0].name && rows[0].name !== t.hotel);
         t.travelDetails = {
           ...(t.travelDetails || {}),
           hotels: rows,
-          lodgingPoints: undefined, // looked up again from the new hotels when the plan is next changed
+          ...(changed ? { lodgingPoints: undefined } : {}), // looked up again from the new hotels
           hotelCheckIn: rows[0].checkIn,
           hotelCheckOut: rows.at(-1).checkOut,
         };
@@ -383,12 +397,12 @@
           save();
           closeModal();
           renderTrip();
-          // With a day plan, every day is re-timed to start and end at that night's hotel.
-          if (t.dailySchedule?.length && window.TriplySchedule?.run)
+          // With a day plan, the days whose hotel changed are re-timed to start and end at that night's hotel.
+          if (changed && t.dailySchedule?.length && window.TriplySchedule?.run)
             window.TriplySchedule.run(
               t,
               null,
-              { force: TripModel.dates(t.start, t.end) },
+              { before: beforeTrip },
               rows.length > 1
                 ? `נשמרו ${rows.length} מלונות — כל יום מתחיל ונגמר במלון של אותו לילה`
                 : "המלון נשמר, וזמני הדרך חושבו מחדש",

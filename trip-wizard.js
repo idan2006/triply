@@ -34,7 +34,8 @@
       scanned = !!t;
     var scannedDetails = Object.assign({}, (t && t.travelDetails) || {}),
       prepaidRows = [],
-      removedPrepaid = {};
+      removedPrepaid = {},
+      longTripOk = false;
     var peopleDraft = t
       ? t.participants.map(function (p) {
           return { id: p.id, name: p.name, budget: String(p.budget == null ? t.budgetPerPerson : p.budget) };
@@ -767,6 +768,16 @@
           })
         )
           throw Error("יש תחנות מחוץ לטווח התאריכים החדש. העבר אותן לימים אחרים לפני השמירה.");
+        // A planned trip made longer than 14 days loses its hour-by-hour plan: say so, and save only on a second click.
+        var newLength = TripModel.dates(next.start, next.end).length;
+        if (t && t.dailySchedule && t.dailySchedule.length && newLength > 14 && !longTripOk) {
+          longTripOk = true;
+          throw Error(
+            "לוח שעות מפורט אפשר עד 14 ימים. אם תשמור טיול של " +
+              newLength +
+              " ימים, הלוח השעתי יוסר (המקומות יישארו בימים שלהם). לחץ שוב על שמירה כדי לאשר.",
+          );
+        }
         var before = state.trips;
         state.trips = t
           ? state.trips.map(function (item) {
@@ -783,22 +794,32 @@
         closeModal();
         selectTrip(next.id);
         toast("הטיול והתקציבים האישיים נשמרו");
-        // New dates or a new hotel: the day plan follows (new days get room for places, legs start at the new hotel).
+        // New dates, flights or hotel: the day plan follows (new days get room for places, landing / flight-home
+        // rows move, legs start at the new hotel). `before` lets the plan see what changed.
+        var flightsOf = function (x) {
+          var d = (x && x.travelDetails) || {};
+          return JSON.stringify([d.arrival || {}, d.departure || {}, d.flights || []]);
+        };
         var datesChanged = t && (t.start !== next.start || t.end !== next.end),
-          hotelChanged = t && (t.hotel || "") !== (next.hotel || "");
+          hotelChanged = t && (t.hotel || "") !== (next.hotel || ""),
+          flightsChanged = t && flightsOf(t) !== flightsOf(next);
         if (
           t &&
           next.dailySchedule &&
           next.dailySchedule.length &&
-          (datesChanged || hotelChanged) &&
+          (datesChanged || hotelChanged || flightsChanged) &&
           window.TriplySchedule &&
           window.TriplySchedule.run
         )
           window.TriplySchedule.run(
             next,
             null,
-            { force: TripModel.dates(next.start, next.end) },
-            datesChanged ? "לוח הימים הותאם לתאריכים החדשים" : "זמני הדרך חושבו מחדש מהמלון החדש",
+            { before: t },
+            datesChanged
+              ? "לוח הימים הותאם לתאריכים החדשים"
+              : flightsChanged
+                ? "הלוח הותאם לטיסות"
+                : "זמני הדרך חושבו מחדש מהמלון החדש",
           );
       } catch (error) {
         $("#formError").textContent = error.message || "לא ניתן לשמור. בדוק את הפרטים ואת החיבור.";

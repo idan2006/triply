@@ -763,6 +763,15 @@
             b = draft.travelDetails?.[key] || {};
           if (a.date !== b.date || a.time !== b.time) flight.push(`${name}: ${when(a) || "—"} ← ${when(b) || "—"}`);
         }
+        const day = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(v || "") ? window.TriplyReflow.dayShort(v) : "—");
+        for (const [key, name] of [
+          ["hotelCheckIn", "צ'ק-אין במלון"],
+          ["hotelCheckOut", "צ'ק-אאוט מהמלון"],
+        ])
+          if ((oldTd[key] || "") !== (draft.travelDetails?.[key] || ""))
+            flight.push(`${name}: ${day(oldTd[key])} ← ${day(draft.travelDetails?.[key])}`);
+        if ((oldTd.notes || "") !== (draft.travelDetails?.notes || "")) flight.push("ההערות לטיול עודכנו");
+        if (!flight.length) flight.push("פרטי הטיסה עודכנו");
         lines.push(...p.changes.flatMap((x) => (/^פרטי טיסה ומלון:/.test(x) ? flight : [x])));
       }
       for (const op of ops) {

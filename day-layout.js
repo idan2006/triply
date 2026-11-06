@@ -14,9 +14,10 @@
     const x = Math.max(0, Math.min(1439, Math.round(v)));
     return `${String(Math.floor(x / 60)).padStart(2, "0")}:${String(x % 60).padStart(2, "0")}`;
   };
-  // Only the exact shapes the planner and this file write ("הליכה אל X (~15 דק')", "חזרה ללינה (הליכה ~10 דק')"),
-  // so a row the traveller wrote himself ("הליכה לאורך התמזה") is never mistaken for a computed leg.
-  const TRAVEL = /^(?:הליכה|נסיעה בתחבורה ציבורית|נסיעה במונית)(?: אל .+)? \(~\d+ דק'\)$|^חזרה ללינה \(.*~\d+ דק'\)$/;
+  // Walks and rides between places — the planner's own rows and the free-text ones of older plans ("הליכה לקובנט
+  // גרדן דרך סוהו", "נסיעה ברכבת התחתית ל…"). The day editor does not let the traveller name a row like that.
+  const TRAVEL =
+    /^(?:הליכה|נסיעה בתחבורה|נסיעה במונית|נסיעה ברכבת|נסיעה באוטובוס|נסיעה במטרו|נסיעה ל(?!שדה התעופה))|^חזרה ללינה/;
   const WAIT = /^הפסקת קפה ליד .+ עד הפתיחה$/;
   const GAP = /^הפסקה קצרה$/;
   const FIXED = /נחיתה|שדה התעופה|המראה|טיסה|צ'ק-אין|צ'ק-אאוט|אריזה|שינה אחרי|^קימה|איסוף מזוודות|^הגעה ל/;
@@ -92,6 +93,17 @@
     let limit = tailFixed ? toMin(tailFixed.startTime) : sleep;
     const home = valid(ctx.home) ? { lat: Number(ctx.home.lat), lng: Number(ctx.home.lng) } : null;
     const pinned = (b) => Boolean(b._pin || (ctx.pinned && ctx.pinned(b)));
+    // Lunch normally floats to 12:00. On a day that ends at the airport it may be a little earlier (from 11:00),
+    // leaving ~30 minutes to get back to the hotel; a meal that cannot fit before the day's end at all is left out
+    // (eaten at the airport / on the way), as the planner itself does.
+    const lunchRow = middleIn.find((b) => isLunch(b) && !pinned(b));
+    const lunchDur = lunchRow ? Math.max(5, Math.round(Number(lunchRow._dur) || 0)) : 60;
+    // time needed after lunch to get back to the hotel (from the day's last place)
+    const lastPlace = [...middleIn].reverse().find((b) => b.placeName);
+    const lastPoint = lastPlace ? ctx.pointOf?.(lastPlace) || null : null;
+    const backLeg = tailFixed && home && lastPlace ? (valid(lastPoint) ? E().travel(lastPoint, home).min : 25) : 30;
+    const lunchAt = tailFixed ? Math.max(11 * 60, Math.min(12 * 60, limit - lunchDur - backLeg)) : 12 * 60;
+    const DINNER_AT = 18 * 60 + 30;
 
     const build = (items, finalFree = 0) => {
       const floating = items.filter((b) => (isLunch(b) || isDinner(b)) && !pinned(b));
@@ -131,13 +143,31 @@
         put(m, m._dur);
       };
       for (const b of list) {
-        if (lunch && t >= 12 * 60 && b._role !== "fixed") {
+        if (lunch && t >= lunchAt && b._role !== "fixed") {
           meal(lunch);
           lunch = null;
         }
-        if (dinner && t >= 18 * 60 + 30 && b._role !== "fixed") {
+        if (dinner && t >= DINNER_AT && b._role !== "fixed") {
           meal(dinner);
           dinner = null;
+        }
+        if (isFree(b) && !pinned(b) && ((lunch && t < lunchAt) || (dinner && t < DINNER_AT))) {
+          // A meal that falls inside a stretch of free time is eaten at its hour, with free time around it.
+          let d = b._dur;
+          for (const [m, at] of [
+            [lunch, lunchAt],
+            [dinner, DINNER_AT],
+          ]) {
+            if (!m || !(t < at && t + d > at)) continue;
+            const part = at - t;
+            put(b, part);
+            d -= part;
+            meal(m);
+            if (m === lunch) lunch = null;
+            else dinner = null;
+          }
+          if (d > 0) put(b, d);
+          continue;
         }
         if (b._role === "fixed") {
           // A fixed row inside the day (rare): keep its clock time; wait if early.
@@ -163,14 +193,20 @@
         put(b, b._dur);
         if (b.placeName) pos = p || UNKNOWN;
       }
-      if (lunch) meal(lunch, 12 * 60);
-      if (dinner) meal(dinner, 18 * 60 + 30);
+      if (lunch) meal(lunch, lunchAt);
+      if (dinner) meal(dinner, DINNER_AT);
       if (finalFree > 0) out.push(row(t, (t += finalFree), FREE_LABEL));
       if (home && list.some((b) => b.placeName)) hop(home, "", true);
       return { out, t, travel, penalty };
     };
 
-    let items = middleIn.map((b) => ({ ...b, _dur: Math.max(5, Math.round(Number(b._dur) || 0)) }));
+    let items = middleIn
+      .map((b) => ({ ...b, _dur: Math.max(5, Math.round(Number(b._dur) || 0)) }))
+      .filter(
+        (b) =>
+          pinned(b) ||
+          !((isLunch(b) && lunchAt + b._dur > limit) || (isDinner(b) && tailFixed && DINNER_AT + b._dur > limit)),
+      );
     let res = build(items);
     const warnings = [];
     // Too long for the day? Shorten free-time rows first (keeping ~30 minutes of evening rest when the day ends

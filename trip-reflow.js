@@ -75,6 +75,27 @@
     else if (departure.date && date > departure.date) k.push("post");
     return k.join("|");
   }
+  /* The hotel of the night of `date` as the traveller set it (by name) — not where the map found it. */
+  function hotelOf(trip, date) {
+    const td = trip.travelDetails || {};
+    const hs = (Array.isArray(td.hotels) ? td.hotels : []).filter((h) => h && h.name && h.checkIn);
+    if (hs.length > 1) {
+      let pick = null;
+      for (const h of hs.slice().sort((a, b) => String(a.checkIn).localeCompare(String(b.checkIn))))
+        if (!pick || h.checkIn <= date) pick = h;
+      return norm(pick.name);
+    }
+    return norm(trip.hotel || td.lodgingPoint?.name || "");
+  }
+  /* This change moved the night's hotel: another hotel, or the same one put somewhere else on the map. */
+  function hotelChanged(before, after, date) {
+    if (hotelOf(before, date) !== hotelOf(after, date)) return true;
+    const a = homeFor(before, date),
+      b = homeFor(after, date);
+    return Boolean(
+      a && b && !a.estimate && !b.estimate && (Math.abs(a.lat - b.lat) > 0.0005 || Math.abs(a.lng - b.lng) > 0.0005),
+    );
+  }
   const commonTime = (trip, key, dflt) => {
     const n = new Map();
     for (const d of trip.dailySchedule || []) n.set(d[key], (n.get(d[key]) || 0) + 1);
@@ -118,7 +139,11 @@
   /* The flights of a planned day changed (e.g. the flight home is earlier now): new fixed rows from the planner,
    * the traveller's places, meals and free time are kept and laid out again inside the new window. */
   function reframeDay(trip, day, wake, sleep) {
-    const frame = frameFor(trip, day.date, wake, sleep);
+    // The day keeps its own wake-up / bedtime (unless they came from the old flights).
+    const own = (day.blocks || []).find((b) => /^קימה/.test(b.activity));
+    const w = own ? own.startTime : wake,
+      z = (day.blocks || []).some((b) => /^המראה/.test(b.activity)) ? sleep : day.sleepTime || sleep;
+    const frame = frameFor(trip, day.date, w, toMin(z) > toMin(w) ? z : sleep);
     const f = L().split(frame),
       old = L().split(day);
     const roomy = f.middle.length > 0 || f.tail.some((b) => b._role === "slack");
@@ -323,12 +348,18 @@
             warnings.push(r.message);
             continue;
           }
+          if (opts.softReframe?.includes(d.date)) continue;
           return r;
         }
         trip.dailySchedule[i] = r.day;
         if (!changed.includes(d.date)) changed.push(d.date);
       }
-      opts = { ...opts, force: [...new Set([...(opts.force || []), ...opts.reframe])] };
+      const kept = new Set(trip.dailySchedule.filter((d) => frameStale(trip, d)).map((d) => d.date));
+      opts = {
+        ...opts,
+        // a day kept as it was (could not be rebuilt) is only re-timed if something else asked for it
+        force: [...new Set([...(opts.force || []), ...opts.reframe.filter((d) => !kept.has(d) || opts.refresh)])],
+      };
     }
     const labels = new Map();
     for (const d of trip.dailySchedule)
@@ -635,6 +666,11 @@
     } catch (e) {
       return { ok: false, message: e.message || "השינוי לא תקין" };
     }
+    // What this change did to the flights and hotels — measured before the map lookups below, so a hotel the map
+    // finds only now does not re-time days nobody touched.
+    const planned = (draft.dailySchedule || []).map((d) => d.date);
+    const flightDays = planned.filter((d) => frameKey(before, d) !== frameKey(draft, d));
+    const hotelDays = planned.filter((d) => hotelChanged(before, draft, d));
     const dates = [...new Set(draft.stops.map((s) => s.date))];
     await ensureCoords(draft, opts.allDates ? null : dates);
     // Flights or hotels changed (here or in `before`): those days get new fixed rows / legs from the right hotel.
@@ -642,21 +678,21 @@
     // are rebuilt.
     let ro = opts;
     if (!opts.transform && !opts.reorder && draft.dailySchedule?.length) {
-      const planned = draft.dailySchedule.map((d) => d.date);
-      const homeKey = (t, d) => {
-        const h = homeFor(t, d);
-        return !h || h.estimate ? "~" : `${(+h.lat).toFixed(5)},${(+h.lng).toFixed(5)}`;
-      };
-      const reframe = opts.refresh
-        ? draft.dailySchedule.filter((d) => frameStale(draft, d)).map((d) => d.date)
-        : planned.filter((d) => frameKey(before, d) !== frameKey(draft, d));
-      const homes = opts.refresh ? planned : planned.filter((d) => homeKey(before, d) !== homeKey(draft, d));
-      if (reframe.length || homes.length)
+      // Days whose flight rows are already out of date (a flight change that did not fit at the time) are fixed
+      // along the way when they can be; if not, they stay as they are (the plan shows a warning for them).
+      const stale = draft.dailySchedule
+        .filter((d) => !flightDays.includes(d.date) && frameStale(draft, d))
+        .map((d) => d.date);
+      const reframe = opts.refresh ? stale : flightDays;
+      const soft = opts.refresh ? [] : stale;
+      const homes = opts.refresh ? planned : hotelDays;
+      if (reframe.length || soft.length || homes.length)
         ro = {
           ...opts,
-          reframe: [...new Set([...(opts.reframe || []), ...reframe])],
+          reframe: [...new Set([...(opts.reframe || []), ...reframe, ...soft])],
+          softReframe: soft,
           force: [...new Set([...(opts.force || []), ...homes])],
-          auto: [...new Set([...reframe, ...homes])],
+          auto: [...new Set([...reframe, ...soft, ...homes])],
         };
     }
     const r = opts.transform

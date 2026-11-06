@@ -99,6 +99,8 @@
     const list = $("#itineraryList");
     if (!list) return;
     const stale = scheduleStale(trip);
+    // Flights changed but the landing / airport rows were never updated (e.g. the day did not fit at the time).
+    const flightsStale = stale ? null : trip.dailySchedule.find((d) => R().frameStale(trip, d)) || null;
     const section = document.createElement("section");
     section.className = "full-day-schedule";
     section.setAttribute("aria-label", "לוח היום");
@@ -135,7 +137,7 @@
       })
       .join("");
     section.innerHTML = `<div class="full-day-heading"><h4>לוח היום</h4><button type="button" class="text-btn" id="editDayTimes">קימה ${escapeHTML(day.wakeTime)} · שינה ${escapeHTML(day.sleepTime)} · שינוי</button></div>
-      ${stale ? '<div class="schedule-warning"><p>יש שינויים בטיול שעוד לא נכנסו ללוח.</p><button type="button" class="small-btn" id="syncSchedule">עדכון הלוח וזמני הדרך עכשיו</button></div>' : ""}
+      ${stale || flightsStale ? `<div class="schedule-warning"><p>${stale ? "יש שינויים בטיול שעוד לא נכנסו ללוח." : `שעות הטיסות לא תואמות ללוח של ${escapeHTML(R().dayShort(flightsStale.date))}.`}</p><button type="button" class="small-btn" id="syncSchedule">עדכון הלוח וזמני הדרך עכשיו</button></div>` : ""}
       <ol class="schedule-blocks">${rows}</ol>
       <p class="schedule-caveat">גוררים שורה בעזרת הנקודות שבצד כדי להקדים או לאחר אותה, או מקום אל יום אחר בשורת הימים. לחיצה על שורה פותחת עריכה (גם להעברה ליום אחר). זמני ההליכה והנסיעה מחושבים מחדש אחרי כל שינוי; הם ושעות הפתיחה הם הערכה.</p>`;
     section.querySelector("#editDayTimes").onclick = () => editDayTimes(trip, day);
@@ -427,6 +429,13 @@
         placeName = $("#schedulePlace").value.trim();
       if (!activity || start === null || !Number.isFinite(len) || len < 5 || len > 600) {
         $("#scheduleEditError").textContent = "בדוק את הפעילות, השעה והמשך.";
+        return;
+      }
+      // Rows named like a walk / ride ("הליכה…", "נסיעה ב…", "חזרה ללינה") are computed by the app and redrawn on every
+      // change — a row the traveller writes must not look like one, or it would disappear.
+      if (!placeName && L().roleOf({ activity, placeName: "" }) === "travel" && activity !== original.activity) {
+        $("#scheduleEditError").textContent =
+          "שורות שמתחילות ב'הליכה', 'נסיעה' או 'חזרה ללינה' מחושבות לבד בלוח. נסח אחרת, למשל: 'טיול רגלי לאורך התמזה'.";
         return;
       }
       let res;

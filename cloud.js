@@ -81,7 +81,7 @@
    * messages are merged item by item, flight / hotel details field by field, the day plan day by day — and the
    * merged days are then re-timed so they match the merged places. */
   const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-  function mergeById(base, mine, theirs, onBoth) {
+  function mergeById(base, mine, theirs, onBoth, byField = false) {
     const map = (list) => new Map((Array.isArray(list) ? list : []).filter((x) => x && x.id).map((x) => [x.id, x]));
     const B = map(base),
       M = map(mine),
@@ -92,9 +92,12 @@
         const m = M.get(id),
           b = B.get(id);
         if (same(m, t) || (B.has(id) && same(m, b))) out.push(t);
+        else if (B.has(id) && same(t, b)) out.push(m);
+        // Changed on both: a place is merged field by field (coordinates found here + a new time there).
+        else if (byField && B.has(id)) out.push(mergeFields(b, m, t, () => onBoth?.()));
         else {
           out.push(m);
-          if (!B.has(id) || !same(t, b)) onBoth?.();
+          onBoth?.();
         }
       } else if (!B.has(id) || !same(t, B.get(id))) out.push(t); // new there, or deleted here but changed there
     }
@@ -189,7 +192,7 @@
         } catch {}
         const draft = {
           ...out,
-          stops: mergeById(base?.stops, mine.stops, theirs.stops, both),
+          stops: mergeById(base?.stops, mine.stops, theirs.stops, both, true),
           dailySchedule: mergeDays(base?.dailySchedule, mine.dailySchedule, theirs.dailySchedule, dates, both),
           scheduleStopSnapshot: "",
         };
@@ -202,16 +205,30 @@
           r = null;
         }
         if (r?.ok) for (const k of plan) out[k] = r.trip[k];
-        else if (!draft.dailySchedule.length) {
+        else {
+          // The two plans do not fit together (e.g. a day too full): every place is kept, the day plan is this
+          // device's and is marked out of date, so the "update the plan" button shows what to fix.
           out.stops = draft.stops;
-          out.dailySchedule = [];
+          out.dailySchedule = draft.dailySchedule.length ? mine.dailySchedule : [];
           out.scheduleStopSnapshot = "";
-        } else {
-          for (const k of plan) out[k] = mine[k]; // could not combine the two plans: this device's plan
-          conflict = true;
+          if (draft.dailySchedule.length) conflict = true;
         }
       }
     }
+    // Flights from one device + a day plan from the other: rebuild the days whose flight rows no longer match
+    // (when they fit; otherwise the plan shows its flights warning).
+    try {
+      const R = window.TriplyReflow;
+      const stale =
+        R && out.dailySchedule?.length ? out.dailySchedule.filter((d) => R.frameStale(out, d)).map((d) => d.date) : [];
+      if (stale.length) {
+        const r = R.reflow(out, { reframe: stale, softReframe: stale, auto: stale });
+        if (r.ok) {
+          window.TripPlanning?.validateSchedule(r.trip, r.trip.dailySchedule);
+          for (const k of plan) out[k] = r.trip[k];
+        }
+      }
+    } catch {}
     try {
       return { trip: TripModel.trip({ ...out, id: mine.id }), conflict };
     } catch {

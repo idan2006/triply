@@ -723,7 +723,8 @@
       for (const k of KEYS) live[k] = before[k];
       return { ok: false, message: "השמירה נכשלה" };
     }
-    return { ...prepared, ok: true, trip: live };
+    // `previous`: the trip exactly as it was just before this change (for "undo")
+    return { ...prepared, ok: true, trip: live, previous: before };
   }
   const liveOf = (trip) =>
     (typeof state !== "undefined" && Array.isArray(state.trips) && state.trips.find((t) => t.id === trip.id)) || trip;
@@ -769,6 +770,7 @@
     homeFor,
     frameKey,
     frameStale,
+    fingerprint,
     dayShort,
     stopForBlock,
   };

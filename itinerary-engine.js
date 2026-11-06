@@ -47,8 +47,9 @@
     return 2 * 6371 * Math.asin(Math.min(1, Math.sqrt(h)));
   }
 
-  /* Door-to-door estimate: walking up to ~1.8 km of street distance,
-   * otherwise public transport (waiting + average urban speed). */
+  /* Door-to-door estimate: walking up to ~2.3 km of street distance, otherwise public transport. A ride's speed grows
+   * with its length (a short hop is mostly walking to the stop and waiting; a long one is a fast metro or train line),
+   * so the time grows like the square root of the distance: ~20 min for 2.5 km, ~35 for 10 km, ~50 for 20 km. */
   function travel(a, b) {
     const d = km(a, b);
     if (!Number.isFinite(d)) return { min: 25, mode: "transit", km: null };
@@ -56,7 +57,7 @@
     const street = d * 1.3;
     if (street <= WALK_STREET_KM) return { min: Math.max(5, up5((street / 4.5) * 60)), mode: "walk", km: street };
     return {
-      min: Math.min(100, up5(12 + (street / 17) * 60)),
+      min: Math.min(100, up5(2 + 10 * Math.sqrt(street))),
       mode: "transit",
       km: street,
     };

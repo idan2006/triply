@@ -48,12 +48,15 @@
     if (street < 0.1) return { min: 0, how: "walk", street };
     if (mode === "WALKING" && street <= 3.5)
       return { min: Math.max(3, Math.round((street / 4.5) * 60)), how: "walk", street };
-    if (mode === "WALKING")
-      return { min: Math.min(120, up5(12 + (street / 17) * 60)), how: "transit", street, far: true };
+    if (mode === "WALKING") return { min: transitMin(street), how: "transit", street, far: true };
     if (mode === "DRIVING") return { min: Math.max(5, up5(6 + (street / 22) * 60)), how: "car", street };
     // Public transport: short hops are still on foot.
     if (street <= 1.6) return { min: Math.max(3, Math.round((street / 4.5) * 60)), how: "walk", street };
-    return { min: Math.min(120, up5(12 + (street / 17) * 60)), how: "transit", street };
+    return { min: transitMin(street), how: "transit", street };
+  }
+  // the same public-transport estimate as the day plan (ItineraryEngine.travel): faster per km on longer rides
+  function transitMin(street) {
+    return Math.min(120, up5(2 + 10 * Math.sqrt(street)));
   }
   const HOW = { walk: ["🚶", "הליכה"], transit: ["🚇", "תחבורה ציבורית"], car: ["🚗", "נסיעה"] };
   const GMODE = { WALKING: "walking", TRANSIT: "transit", DRIVING: "driving" };

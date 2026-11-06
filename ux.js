@@ -510,10 +510,39 @@
     );
     window.dispatchEvent(new CustomEvent("triply:trips-changed"));
   };
+  /* ---- Which version is running, and picking up a new one when the app comes back to the screen ---- */
+  const APP_VERSION = 32; // same number as CACHE "triply-shell-v32" in sw.js
+  window.TRIPLY_VERSION = APP_VERSION;
+  const native = Boolean(window.Capacitor?.isNativePlatform?.());
+  let lastCheck = 0;
+  const checkVersion = async () => {
+    if (native || Date.now() - lastCheck < 60000) return;
+    lastCheck = Date.now();
+    try {
+      const r = await fetch("./sw.js?check=" + Date.now(), { cache: "no-store" });
+      const m = (await r.text()).match(/triply-shell-v(\d+)/);
+      if (!m || Number(m[1]) <= APP_VERSION) return;
+      // an app left open on the phone keeps old code in memory: load the new version (unless a form is open) —
+      // once per version, so a cache that still serves the old files cannot cause a reload loop
+      let tried = "";
+      try {
+        tried = sessionStorage.getItem("triply:reloaded-for") || "";
+      } catch {}
+      if (!document.querySelector(".modal-backdrop.show") && tried !== m[1]) {
+        try {
+          sessionStorage.setItem("triply:reloaded-for", m[1]);
+        } catch {}
+        location.reload();
+      } else toast("יש גרסה חדשה של האפליקציה — סגור ופתח אותה כדי לקבל אותה");
+    } catch {}
+  };
+  document.addEventListener("visibilitychange", () => document.visibilityState === "visible" && checkVersion());
+  setTimeout(checkVersion, 4000);
   const btn = $("#settingsBtn");
   if (btn && typeof openSettings === "function") {
     btn.onclick = () => {
       openSettings();
+      $(".modal")?.insertAdjacentHTML("beforeend", `<p class="muted app-version">גרסה ${APP_VERSION}</p>`);
       const anchor = $("#backupData");
       if (anchor && !$("#importBackup")) {
         anchor.insertAdjacentHTML(

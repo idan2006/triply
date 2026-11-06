@@ -505,10 +505,13 @@
         };
         $("#acceptProposal").onclick = async (ev) => {
           ev.currentTarget.disabled = true;
+          const before = structuredClone(t);
+          let touchedIds = proposal.touched || [];
           let res = window.TriplyReflow.apply(t, proposal.prepared);
           if (!res.ok && res.conflict) {
             // The trip changed meanwhile (e.g. on another device): the same answer is applied to the new version.
             const again = await buildProposal(t, data, compact, text);
+            touchedIds = again.touched || touchedIds;
             res = again.error ? { ok: false, message: again.error } : window.TriplyReflow.apply(t, again.prepared);
           }
           if (!res.ok) {
@@ -529,6 +532,12 @@
             const first = proposal.focusDate;
             if (first && TripModel.dates(t.start, t.end).includes(first)) selectedDate = first;
             if (!TripModel.dates(t.start, t.end).includes(selectedDate)) selectedDate = t.start;
+            // Show the result right away: the chat closes, the day opens with the moved places marked, and the
+            // change can be undone from the bar at the top.
+            if (window.TriplySchedule?.noteChange && proposal.changedDays) {
+              closeModal();
+              window.TriplySchedule.noteChange(res.previous || before, res.trip || t, new Set(touchedIds));
+            }
             renderTrip();
           }
         };
@@ -896,6 +905,7 @@
     }
     return {
       prepared,
+      touched: [...touched.keys()],
       lines: touched.size || lines.length ? lines : [],
       warnings: [...(prepared.warnings || []), ...hours, ...notes],
       changedDays: prepared.changed?.length || 0,

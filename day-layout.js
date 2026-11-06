@@ -105,6 +105,8 @@
     const lunchAt = tailFixed ? Math.max(11 * 60, Math.min(12 * 60, limit - lunchDur - backLeg)) : 12 * 60;
     const DINNER_AT = 18 * 60 + 30;
 
+    // true once waiting for a meal's hour (see `side` below) would overfill the day: the meal is then eaten at once.
+    let eager = false;
     const build = (items, finalFree = 0) => {
       const floating = items.filter((b) => (isLunch(b) || isDinner(b)) && !pinned(b));
       const list = items.filter((b) => !floating.includes(b));
@@ -142,13 +144,19 @@
         }
         put(m, m._dur);
       };
+      // The row the traveller just dragged keeps its side of each meal: dropped after lunch, lunch comes first (from
+      // half an hour before its usual hour, with free time before it if needed); dropped before lunch, it is visited
+      // first even if lunch is later.
+      const side = (b, m) => (m && b._pin ? Math.sign(items.indexOf(b) - items.indexOf(m)) : 0);
       for (const b of list) {
-        if (lunch && t >= lunchAt && b._role !== "fixed") {
-          meal(lunch);
+        const ls = side(b, lunch);
+        if (lunch && b._role !== "fixed" && (ls > 0 || (!ls && t >= lunchAt))) {
+          meal(lunch, ls > 0 && !eager ? Math.min(lunchAt, Math.max(11 * 60, lunchAt - 30)) : 0);
           lunch = null;
         }
-        if (dinner && t >= DINNER_AT && b._role !== "fixed") {
-          meal(dinner);
+        const ds = side(b, dinner);
+        if (dinner && b._role !== "fixed" && (ds > 0 || (!ds && t >= DINNER_AT))) {
+          meal(dinner, ds > 0 && !eager ? DINNER_AT - 30 : 0);
           dinner = null;
         }
         if (isFree(b) && !pinned(b) && ((lunch && t < lunchAt) || (dinner && t < DINNER_AT))) {
@@ -226,6 +234,10 @@
     }
     if (res.t > limit) {
       items = items.filter((x) => !isFree(x) || pinned(x));
+      res = build(items);
+    }
+    if (res.t > limit) {
+      eager = true;
       res = build(items);
     }
     let sleepOut = sleep;
@@ -345,7 +357,16 @@
       const order = middle.slice();
       order.splice(i, 0, item);
       const r = layout(day, order, ctx);
-      const cost = r.ok ? r.travel + r.penalty : 100000 + (r.over || 0);
+      // A place with no time asked for goes where it fits best — preferably in daylight hours, not after dinner.
+      const at = r.ok
+        ? r.day.blocks.find(
+            (b) =>
+              (item.existingStopId && b.existingStopId === item.existingStopId) ||
+              (!item.existingStopId && b.placeName && b.placeName === item.placeName),
+          )
+        : null;
+      const late = at ? Math.max(0, toMin(at.startTime) - 19 * 60) * 1.5 : 0;
+      const cost = r.ok ? r.travel + r.penalty + late : 100000 + (r.over || 0);
       if (!best || cost < best.cost) best = { cost, order, ok: r.ok };
     }
     return best ? best.order : [...middle, item];

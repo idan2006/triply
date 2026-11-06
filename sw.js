@@ -1,4 +1,4 @@
-const CACHE = "triply-shell-v31";
+const CACHE = "triply-shell-v32";
 const BASE = new URL(self.registration.scope).pathname;
 const ASSETS = [
   "",

@@ -17,3 +17,19 @@
 .full-day-schedule.sb-busy{opacity:.55;pointer-events:none;transition:opacity .15s}
 .sb-move-row{display:flex;gap:.5rem;margin:.25rem 0 .75rem}
 .sb-move-row .secondary-btn{flex:1;margin-top:0}
+/* What just changed: the moved place lights up with where it was; places that only shifted in time get a soft mark */
+.sb-row{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
+.schedule-block.sb-moved{box-shadow:0 0 0 3px #CC2B66 inset;animation:sbMoved 1.1s ease-out 2}
+.schedule-block.sb-moved .sb-row time{color:#CC2B66}
+.sb-was{display:inline-block;margin-top:.3rem;padding:.12rem .55rem;border-radius:999px;background:#CC2B66;color:#fff;font-size:.75rem;font-weight:700;line-height:1.4;width:fit-content}
+.schedule-block.sb-shifted .sb-row time{background:#FFE1EE;border-radius:6px;padding:0 .25rem;color:#8B2854}
+@keyframes sbMoved{0%{box-shadow:0 0 0 6px rgba(204,43,102,.55) inset;transform:scale(1.015)}100%{box-shadow:0 0 0 3px #CC2B66 inset;transform:none}}
+@media (prefers-reduced-motion:reduce){.schedule-block.sb-moved{animation:none}}
+/* The bar that says what changed, with undo (top of the screen, so it never hides the list) */
+.change-bar{position:fixed;z-index:15;top:calc(env(safe-area-inset-top,0px) + 10px);left:50%;transform:translate(-50%,-140%);width:min(94vw,520px);display:flex;align-items:center;gap:.5rem;padding:.65rem .75rem;border-radius:16px;background:#3A0F24;color:#fff;box-shadow:0 14px 34px rgba(58,15,36,.32);transition:transform .25s ease}
+.change-bar.show{transform:translate(-50%,0)}
+.change-bar .cb-msg{flex:1;display:grid;gap:.15rem;min-width:0}
+.change-bar .cb-msg b{font-size:.95rem;line-height:1.35}
+.change-bar .cb-msg small{font-size:.8rem;color:#F4C9DA;line-height:1.35}
+.change-bar .cb-undo{flex:none;background:#fff;color:#3A0F24;border-radius:12px;padding:.5rem .8rem;font-weight:800;font-size:.9rem}
+.change-bar .cb-x{flex:none;background:transparent;color:#F4C9DA;font-size:1rem;padding:.4rem}

@@ -56,7 +56,12 @@
     return m ? +m[1] * 60 + +m[2] : null;
   };
   const onTrip = (t) => t && !t.archived && t.start <= today() && today() <= t.end;
-  const isMove = (b) => !b.placeName && /^הליכה|\(הליכה|תחבורה|נסיעה|מונית/.test(b.activity);
+  // A walk / ride between places (not e.g. "landing and the ride to the hotel", which is its own step).
+  const isMove = (b) =>
+    !b.placeName &&
+    (window.TriplyDayLayout
+      ? window.TriplyDayLayout.roleOf(b) === "travel"
+      : /^הליכה|^נסיעה בתחבורה|^נסיעה במונית|^חזרה ללינה/.test(b.activity));
   function nowNext(t) {
     const day = t.dailySchedule?.find((d) => d.date === today());
     if (day?.blocks?.length) {
@@ -71,7 +76,12 @@
         cur && isMove(cur)
           ? cur
           : blocks.slice(i + 1).find((b) => isMove(b) && next && toMin(b.startTime) < toMin(next.startTime));
-      return { cur, next, move, done: !cur && !next };
+      // Where to navigate: the next place still ahead (not the one we are standing in).
+      const after = i >= 0 ? blocks.slice(i + 1) : blocks.filter((b) => toMin(b.startTime) >= n);
+      const goal = after.find((b) => b.placeName) || null;
+      const flewHome = blocks.some((b) => /המראה|טיסה הביתה/.test(b.activity) && toMin(b.startTime) <= n);
+      const bedtime = n >= toMin(day.sleepTime);
+      return { cur, next, move, goal, done: !cur && !next, flewHome, bedtime };
     }
     const stops = t.stops.filter((s) => s.date === today()).sort((a, b) => a.time.localeCompare(b.time)),
       n = nowMin();
@@ -90,7 +100,7 @@
     return u.toString();
   }
   function card(t) {
-    const { cur, next, done } = nowNext(t);
+    const { cur, next, done, goal, flewHome, bedtime } = nowNext(t);
     const dayNo = TripModel.dates(t.start, t.end).indexOf(today()) + 1;
     const nowLine = cur
       ? `<div class="today-now"><span>עכשיו</span><b>${escapeHTML(label(cur))}</b>${cur.endTime ? `<small>עד ${escapeHTML(cur.endTime)}</small>` : ""}</div>`
@@ -98,8 +108,13 @@
     const nextLine = next
       ? `<div class="today-next"><span>הבא</span><b>${escapeHTML(label(next))}</b><small>ב-${escapeHTML(next.startTime)}</small></div>`
       : "";
-    const target = next && place(next) ? next : cur && place(cur) ? cur : null;
-    return `<section class="today-card" aria-label="היום בטיול"><div class="today-kicker">היום בטיול · יום ${dayNo}</div>${nowLine}${nextLine}${done ? '<p class="today-done">סיימתם את התוכנית של היום. ערב חופשי!</p>' : ""}${!cur && !next && !done ? '<p class="today-done">אין עדיין תוכנית להיום. לחץ על "תכנן לי את כל הטיול".</p>' : ""}${target ? `<a class="today-nav" href="${escapeHTML(navUrl(t, target))}" target="_blank" rel="noopener">ניווט אל ${escapeHTML(place(target))}</a>` : ""}</section>`;
+    const target = goal !== undefined ? goal : next && place(next) ? next : cur && place(cur) ? cur : null;
+    const doneText = flewHome
+      ? "נסיעה טובה הביתה! ✈"
+      : bedtime
+        ? "לילה טוב! התוכנית של מחר מחכה ביום הבא."
+        : "סיימתם את התוכנית של היום. ערב חופשי!";
+    return `<section class="today-card" aria-label="היום בטיול"><div class="today-kicker">היום בטיול · יום ${dayNo}</div>${nowLine}${nextLine}${done ? `<p class="today-done">${doneText}</p>` : ""}${!cur && !next && !done ? '<p class="today-done">אין עדיין תוכנית להיום. לחץ על "תכנן לי את כל הטיול".</p>' : ""}${target ? `<a class="today-nav" href="${escapeHTML(navUrl(t, target))}" target="_blank" rel="noopener">ניווט אל ${escapeHTML(place(target))}</a>` : ""}</section>`;
   }
   const prevSelect = selectTrip;
   selectTrip = function (id) {
@@ -292,6 +307,7 @@
 (function () {
   "use strict";
   const iso = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v || "");
+  const dayAfter = (d, n = 1) => new Date(Date.parse(d + "T12:00:00Z") + n * 86400000).toISOString().slice(0, 10);
   window.openHotelsEditor = function () {
     const t = currentTrip();
     if (!t) return;
@@ -304,7 +320,7 @@
     if (!rows.length) rows = [{ name: t.hotel || "", city: t.city, checkIn: t.start, checkOut: t.end }];
     const draw = () => {
       openModal(
-        `<h2>ערים ומלונות</h2><p>טיול בכמה ערים או כמה מלונות? הוסף כל מלון עם התאריכים שלו, והתכנון יבנה כל יום מהמלון של אותו לילה.</p><form id="hotelsForm">${rows.map((r, i) => `<fieldset class="hotel-row"><legend>מלון ${i + 1}</legend><div class="field-grid"><div class="field"><label for="hc${i}">עיר</label><input id="hc${i}" value="${escapeHTML(r.city)}" maxlength="120" required></div><div class="field"><label for="hn${i}">שם המלון</label><input id="hn${i}" value="${escapeHTML(r.name)}" maxlength="160"></div></div><div class="field-grid"><div class="field"><label for="hi${i}">צ'ק-אין</label><input id="hi${i}" type="date" min="${t.start}" max="${t.end}" value="${escapeHTML(r.checkIn)}" required></div><div class="field"><label for="ho${i}">צ'ק-אאוט</label><input id="ho${i}" type="date" min="${t.start}" max="${t.end}" value="${escapeHTML(r.checkOut)}" required></div></div>${rows.length > 1 ? `<button type="button" class="text-btn" data-del-hotel="${i}">הסרת המלון</button>` : ""}</fieldset>`).join("")}<button type="button" class="secondary-btn" id="addHotelRow">＋ עוד עיר או מלון</button><p id="hotelsError" role="alert"></p><button class="primary-btn">שמירה</button></form>`,
+        `<h2>ערים ומלונות</h2><p>טיול בכמה ערים או כמה מלונות? הוסף כל מלון עם התאריכים שלו, והתכנון יבנה כל יום מהמלון של אותו לילה.</p><form id="hotelsForm">${rows.map((r, i) => `<fieldset class="hotel-row"><legend>מלון ${i + 1}</legend><div class="field-grid"><div class="field"><label for="hc${i}">עיר</label><input id="hc${i}" value="${escapeHTML(r.city)}" maxlength="120" required></div><div class="field"><label for="hn${i}">שם המלון</label><input id="hn${i}" value="${escapeHTML(r.name)}" maxlength="160"></div></div><div class="field-grid"><div class="field"><label for="hi${i}">צ'ק-אין</label><input id="hi${i}" type="date" min="${t.start}" max="${t.end}" value="${escapeHTML(r.checkIn)}" required></div><div class="field"><label for="ho${i}">צ'ק-אאוט</label><input id="ho${i}" type="date" min="${t.start}" max="${dayAfter(t.end)}" value="${escapeHTML(r.checkOut)}" required></div></div>${rows.length > 1 ? `<button type="button" class="text-btn" data-del-hotel="${i}">הסרת המלון</button>` : ""}</fieldset>`).join("")}<button type="button" class="secondary-btn" id="addHotelRow">＋ עוד עיר או מלון</button><p id="hotelsError" role="alert"></p><button class="primary-btn">שמירה</button></form>`,
       );
       const read = () =>
         (rows = rows.map((_, i) => ({
@@ -316,7 +332,19 @@
       $("#addHotelRow").onclick = () => {
         read();
         const last = rows.at(-1);
-        rows.push({ city: "", name: "", checkIn: last?.checkOut || t.start, checkOut: t.end });
+        let checkIn = last?.checkOut && last.checkOut < t.end ? last.checkOut : "";
+        if (!checkIn && last?.checkIn && last.checkIn < t.end) {
+          // The previous hotel ran to the end: split its nights in two, so both rows are valid at once.
+          const nights = Math.round((Date.parse(t.end) - Date.parse(last.checkIn)) / 86400000);
+          checkIn = dayAfter(last.checkIn, Math.max(1, Math.floor(nights / 2)));
+          last.checkOut = checkIn;
+        }
+        rows.push({
+          city: last?.city || "",
+          name: "",
+          checkIn: checkIn || t.start,
+          checkOut: t.end > (checkIn || t.start) ? t.end : dayAfter(t.end),
+        });
         draw();
       };
       $$("[data-del-hotel]").forEach(
@@ -346,6 +374,7 @@
         t.travelDetails = {
           ...(t.travelDetails || {}),
           hotels: rows,
+          lodgingPoints: undefined, // looked up again from the new hotels when the plan is next changed
           hotelCheckIn: rows[0].checkIn,
           hotelCheckOut: rows.at(-1).checkOut,
         };
@@ -354,9 +383,17 @@
           save();
           closeModal();
           renderTrip();
-          toast(
-            rows.length > 1 ? `נשמרו ${rows.length} מלונות. לחץ "תכנן לי את כל הטיול" כדי לבנות מחדש.` : "המלון נשמר",
-          );
+          // With a day plan, every day is re-timed to start and end at that night's hotel.
+          if (t.dailySchedule?.length && window.TriplySchedule?.run)
+            window.TriplySchedule.run(
+              t,
+              null,
+              { force: TripModel.dates(t.start, t.end) },
+              rows.length > 1
+                ? `נשמרו ${rows.length} מלונות — כל יום מתחיל ונגמר במלון של אותו לילה`
+                : "המלון נשמר, וזמני הדרך חושבו מחדש",
+            );
+          else toast(rows.length > 1 ? `נשמרו ${rows.length} מלונות` : "המלון נשמר");
         } catch {
           t.travelDetails = before;
           t.hotel = beforeHotel;
@@ -431,9 +468,25 @@
       toast("השמירה נכשלה — ייתכן שאין מקום בדפדפן");
       return;
     }
+    // Preferences and saved places from the backup fill in what this device does not have yet.
     try {
-      if (data?.preferences && typeof preferences === "object" && !Object.keys(preferences).some((k) => preferences[k]))
-        Object.assign(preferences, data.preferences);
+      if (data?.preferences && typeof data.preferences === "object" && typeof preferences === "object") {
+        for (const [k, v] of Object.entries(data.preferences))
+          if (v !== undefined && v !== null && v !== "" && (preferences[k] === undefined || preferences[k] === ""))
+            preferences[k] = v;
+        localStorage.setItem(profileStorageKey("preferences"), JSON.stringify(preferences));
+        if (typeof preferencesSummary === "function") preferencesSummary();
+      }
+      if (Array.isArray(data?.savedPlaces) && Array.isArray(savedPlaces)) {
+        const have = new Set(savedPlaces.map((p) => String(p.name || "").toLowerCase()));
+        const add = data.savedPlaces
+          .filter((p) => p && typeof p.name === "string" && p.name.trim() && !have.has(p.name.toLowerCase()))
+          .map((p) => ({ id: String(p.id || crypto.randomUUID()).slice(0, 80), name: p.name.slice(0, 200) }));
+        if (add.length) {
+          savedPlaces = [...savedPlaces, ...add];
+          localStorage.setItem(profileStorageKey("saved"), JSON.stringify(savedPlaces));
+        }
+      }
     } catch {}
     closeModal();
     renderTrips();

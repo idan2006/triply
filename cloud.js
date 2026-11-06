@@ -64,6 +64,68 @@
     }
     return data;
   }
+  /* ---- Both this device and another one changed the same trip before syncing: merge instead of dropping ----
+   * `base` is the last version both sides had (saved with every sync). Per field: whoever changed it wins;
+   * expenses, people and chat messages changed on both sides are merged item by item; the plan (places +
+   * day plan) changed on both sides keeps this device's version. */
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  function mergeById(base, mine, theirs) {
+    const map = (list) => new Map((Array.isArray(list) ? list : []).filter((x) => x && x.id).map((x) => [x.id, x]));
+    const B = map(base),
+      M = map(mine),
+      T = map(theirs);
+    const out = [];
+    for (const [id, t] of T) {
+      if (M.has(id)) out.push(B.has(id) && same(M.get(id), B.get(id)) ? t : M.get(id));
+      else if (!B.has(id) || !same(t, B.get(id))) out.push(t); // new there, or deleted here but changed there
+    }
+    for (const [id, m] of M) {
+      if (T.has(id)) continue;
+      if (!B.has(id) || !same(m, B.get(id))) out.push(m); // new here, or deleted there but changed here
+    }
+    return out;
+  }
+  function mergeTrip(base, mine, theirs) {
+    const out = { ...theirs };
+    let conflict = false;
+    const plan = ["stops", "dailySchedule", "scheduleStopSnapshot"];
+    const changedHere = (k) => !base || !same(mine[k], base[k]);
+    const changedThere = (k) => !base || !same(theirs[k], base[k]);
+    const keys = new Set([...Object.keys(mine), ...Object.keys(theirs)]);
+    for (const k of keys) {
+      if (plan.includes(k) || k === "id") continue;
+      if (same(mine[k], theirs[k]) || !changedHere(k)) continue; // theirs (or equal)
+      if (!changedThere(k)) {
+        out[k] = mine[k];
+        continue;
+      }
+      if (k === "expenses" || k === "participants") out[k] = mergeById(base?.[k], mine[k], theirs[k]);
+      else if (k === "chat") {
+        const seen = new Set((theirs.chat || []).map((x) => JSON.stringify(x)));
+        out.chat = [...(theirs.chat || []), ...(mine.chat || []).filter((x) => !seen.has(JSON.stringify(x)))].slice(
+          -80,
+        );
+      } else {
+        out[k] = mine[k];
+        conflict = true;
+      }
+    }
+    const planHere = plan.some(changedHere),
+      planThere = plan.some(changedThere);
+    if (planHere && !plan.every((k) => same(mine[k], theirs[k]))) {
+      for (const k of plan) out[k] = mine[k];
+      if (planThere) conflict = true;
+    }
+    try {
+      return { trip: TripModel.trip({ ...out, id: mine.id }), conflict };
+    } catch {
+      return { trip: mine, conflict: true };
+    }
+  }
+  const inPlace = (local, next) => {
+    for (const key of Object.keys(local)) if (!(key in next)) delete local[key];
+    Object.assign(local, next);
+  };
   const localSave = () => {
     try {
       localStorage.setItem(storeKey, JSON.stringify(state.trips));
@@ -98,7 +160,13 @@
       const owner = row.owner_id === uid;
       if (i < 0) {
         state.trips.push(remote);
-        known[row.id] = { at: row.updated_at, h: tripHash(remote), owner, code: row.share_code || "" };
+        known[row.id] = {
+          at: row.updated_at,
+          h: tripHash(remote),
+          owner,
+          code: row.share_code || "",
+          b: JSON.stringify(remote),
+        };
         changed = true;
         continue;
       }
@@ -106,14 +174,48 @@
       if (!k || row.updated_at !== k.at) {
         const localEdited = k && tripHash(local) !== k.h;
         if (!k && tripHash(local) === tripHash(remote)) {
-          known[row.id] = { at: row.updated_at, h: tripHash(remote), owner, code: row.share_code || "" };
+          known[row.id] = {
+            at: row.updated_at,
+            h: tripHash(remote),
+            owner,
+            code: row.share_code || "",
+            b: JSON.stringify(remote),
+          };
           continue;
         }
-        if (localEdited || !k) {
-          /* both sides changed: keep the newer cloud copy, it may come from a companion */
+        if (localEdited) {
+          // Both sides changed: merge, keep this device's unsent edits,
+          // and send the result. The same object is updated so an open chat or day plan stays live.
+          let base = null;
+          try {
+            base = k?.b ? JSON.parse(k.b) : null;
+          } catch {}
+          const merged = mergeTrip(base, local, remote);
+          inPlace(local, merged.trip);
+          known[row.id] = {
+            at: row.updated_at,
+            h: tripHash(remote),
+            owner,
+            code: row.share_code || "",
+            b: JSON.stringify(remote),
+          };
+          changed = true;
+          notes.push(
+            merged.conflict
+              ? `"${remote.city}" השתנה גם במכשיר אחר. שילבתי את השינויים; כשהמסלול שונה בשני המקומות, נשמר המסלול מהמכשיר הזה.`
+              : `"${remote.city}" עודכן ממכשיר אחר, והשינויים שלך נשמרו`,
+          );
+          continue;
         }
-        state.trips[i] = remote;
-        known[row.id] = { at: row.updated_at, h: tripHash(remote), owner, code: row.share_code || "" };
+        // Update the same object, so an open chat or day plan keeps pointing at the live trip.
+        inPlace(local, remote);
+        known[row.id] = {
+          at: row.updated_at,
+          h: tripHash(local),
+          owner,
+          code: row.share_code || "",
+          b: JSON.stringify(local),
+        };
         changed = true;
         if (k) notes.push(`"${remote.city}" עודכן ממכשיר אחר`);
       } else {
@@ -156,7 +258,7 @@
           body: { data: t, deleted: false },
           prefer: "return=representation",
         });
-        if (Array.isArray(r) && r[0]) known[t.id] = { ...k, at: r[0].updated_at, h };
+        if (Array.isArray(r) && r[0]) known[t.id] = { ...k, at: r[0].updated_at, h, b: JSON.stringify(t) };
         else delete known[t.id];
       } else {
         try {
@@ -165,7 +267,7 @@
             body: { id: t.id, data: t },
             prefer: "return=representation",
           });
-          known[t.id] = { at: r?.[0]?.updated_at || "", h, owner: true, code: "" };
+          known[t.id] = { at: r?.[0]?.updated_at || "", h, owner: true, code: "", b: JSON.stringify(t) };
         } catch (e) {
           if (e.code === "23505") {
             const r = await api("/trip_docs?id=eq." + encodeURIComponent(t.id), {
@@ -173,7 +275,7 @@
               body: { data: t, deleted: false },
               prefer: "return=representation",
             });
-            if (r?.[0]) known[t.id] = { at: r[0].updated_at, h, owner: false, code: "" };
+            if (r?.[0]) known[t.id] = { at: r[0].updated_at, h, owner: false, code: "", b: JSON.stringify(t) };
           } else throw e;
         }
       }
@@ -329,9 +431,13 @@
     if (!k) {
       panel.innerHTML =
         '<div class="share-card"><h2>שיתוף הטיול</h2><p>הטיול נשמר בענן עוד רגע, ואז אפשר יהיה להזמין חברים.</p></div>';
-      sync("push").then(() => {
-        if (known[t.id]) renderMembers();
-      });
+      // A sync that is already running finishes first; redraw when the trip is in the cloud.
+      const again = () => {
+        if (known[t.id] && currentTrip()?.id === t.id && $("#membersPanel")?.classList.contains("active-panel"))
+          renderMembers();
+      };
+      window.addEventListener("triply:cloud-ok", again, { once: true });
+      sync("push").then(again);
       return;
     }
     let members = [];
@@ -448,6 +554,7 @@
   });
   window.TriplyCloud = {
     sync,
+    mergeTrip,
     renderMembers,
     get available() {
       return available;

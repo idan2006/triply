@@ -3,7 +3,17 @@ const liveCache = new Map();
 async function publicJSON(url) {
   const cached = liveCache.get(url);
   if (cached && Date.now() - cached.at < 3600000) return cached.value;
-  const response = await fetch(url, { signal: AbortSignal.timeout(15000) });
+  let response;
+  try {
+    response = await fetch(url, { signal: AbortSignal.timeout(15000) });
+  } catch {
+    // "Failed to fetch" / timeout → a message the traveller understands
+    throw Error(
+      /frankfurter/.test(url)
+        ? "לא הצלחתי להביא שער המרה כרגע (אין חיבור לאינטרנט?). נסה שוב, או רשום את הסכום במטבע של הטיול."
+        : "אין חיבור לשירות הנתונים כרגע. בדוק את החיבור ונסה שוב.",
+    );
+  }
   if (!response.ok) throw Error("ספק הנתונים לא זמין כרגע. נסו שוב מאוחר יותר.");
   const value = await response.json();
   liveCache.set(url, { at: Date.now(), value });

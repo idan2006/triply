@@ -1,4 +1,4 @@
-const CACHE = "triply-shell-v30";
+const CACHE = "triply-shell-v31";
 const BASE = new URL(self.registration.scope).pathname;
 const ASSETS = [
   "",
@@ -21,6 +21,7 @@ const ASSETS = [
   "trip-wizard.js",
   "auth.js",
   "day-layout.js",
+  "trip-reflow.js",
   "daily-schedule.js",
   "itinerary-engine.js",
   "trip-autoplan.js",

@@ -11,3 +11,9 @@
 .schedule-block small{color:#665b63}
 .schedule-edit-btn{flex:none;padding:.42rem .65rem}
 @media(max-width:480px){.schedule-block{gap:.45rem;align-items:flex-start}.schedule-block time{min-width:4.7rem;font-size:.78rem}.schedule-edit-btn{font-size:.78rem;padding:.35rem .5rem}}
+.schedule-warning{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:.5rem}
+.schedule-warning p{margin:0}
+.schedule-warning .small-btn{margin:0;background:#fff;border:1px solid #e0b14a;color:#6c4b00;border-radius:12px;padding:.45rem .8rem;font-weight:700}
+.full-day-schedule.sb-busy{opacity:.55;pointer-events:none;transition:opacity .15s}
+.sb-move-row{display:flex;gap:.5rem;margin:.25rem 0 .75rem}
+.sb-move-row .secondary-btn{flex:1;margin-top:0}

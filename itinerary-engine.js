@@ -108,6 +108,7 @@
     return out;
   }
   const weekday = (iso) => new Date(iso + "T12:00:00Z").getUTCDay();
+  const addDays = (iso, n) => new Date(Date.parse(iso + "T12:00:00Z") + n * 86400000).toISOString().slice(0, 10);
 
   function normalizeItem(x, rank, pace) {
     if (!x || typeof x !== "object") return null;
@@ -197,7 +198,8 @@
     if (sleepPref <= wakePref + 300) sleepPref = Math.min(1439, wakePref + 15 * 60);
     const meal = mealPlan(input);
     const arrival = input.arrival || {},
-      departure = input.departure || {};
+      departure = input.departure || {},
+      outbound = input.outbound || {};
     const arrMin = toMin(arrival.time),
       depMin = toMin(departure.time);
     return list.map((date, index) => {
@@ -221,6 +223,31 @@
       };
       const isArrival = arrival.date === date && arrMin !== null;
       const isDeparture = departure.date === date && depMin !== null;
+      // Days before the landing (e.g. the trip starts on the evening flight and lands after midnight)
+      // are spent at home and on the plane — no sightseeing in the destination.
+      if (arrMin !== null && arrival.date && date < arrival.date) {
+        const city = String(input.city || "").trim();
+        const to = city ? (/^[\u0590-\u05FF]/.test(city) ? "ל" + city : "ל-" + city) : "";
+        const flightDay = date === addDays(arrival.date, -1) || outbound.date === date;
+        const dep = outbound.date === date ? toMin(outbound.time) : null;
+        f.kind = "pre-arrival";
+        f.start = null;
+        if (flightDay && dep !== null && dep >= f.wake + 120) {
+          const airport = Math.max(f.wake + 60, dep - 180);
+          f.pre.push([f.wake, airport, "אריזה והתארגנות לטיסה (עוד בבית)", ""]);
+          f.pre.push([airport, dep, "נסיעה לשדה התעופה, צ'ק-אין וביקורת ביטחון", ""]);
+          f.sleep = Math.max(f.sleep, Math.min(1439, dep + 30));
+          f.pre.push([dep, f.sleep, `טיסה${to ? " " + to : ""}`, ""]);
+        } else if (flightDay) {
+          const end = Math.max(f.wake + 60, f.sleep - 90);
+          f.pre.push([f.wake, end, `יום הטיסה${to ? " " + to : ""} — אריזה, נסיעה לשדה התעופה וביקורת ביטחון`, ""]);
+          f.pre.push([end, f.sleep, `טיסה${to ? " " + to : ""} (הנחיתה ב-${arrival.time})`, ""]);
+        } else {
+          f.pre.push([f.wake, f.sleep - 60, "יום לפני הטיסה — עוד בבית", ""]);
+          f.pre.push([f.sleep - 60, f.sleep, "אריזה והתארגנות לטיסה", ""]);
+        }
+        return f;
+      }
       // Default morning.
       let cursor = f.wake;
       if (isArrival) {

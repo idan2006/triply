@@ -194,6 +194,7 @@
     try {
       Object.assign(preferences, patch);
       localStorage.setItem(profileStorageKey("preferences"), JSON.stringify(preferences));
+      if (typeof preferencesSummary === "function") preferencesSummary();
     } catch {}
   }
   // All AI calls of one plan (one per city) share a group id, so the server counts them as one plan.
@@ -250,12 +251,7 @@
       budget: preferences.budgetStyle || "",
       wake: HHMM.test(preferences.wake || "") ? preferences.wake : "08:00",
       sleep: HHMM.test(preferences.sleep || "") ? preferences.sleep : "23:00",
-      arrivalTime: td.arrival?.date === trip.start && HHMM.test(td.arrival?.time || "") ? td.arrival.time : "",
-      departureTime: td.departure?.date === trip.end && HHMM.test(td.departure?.time || "") ? td.departure.time : "",
-      flightsKnown: Boolean(
-        (td.arrival?.date === trip.start && td.arrival?.time) ||
-        (td.departure?.date === trip.end && td.departure?.time),
-      ),
+      ...flightState(trip),
       hotel: trip.hotel || "",
       keepStops: true,
       mustSee: "",
@@ -264,6 +260,28 @@
       meals: preferences.meals && typeof preferences.meals === "object" ? { ...preferences.meals } : {},
       linger: Number(preferences.linger) || 0,
       stroll: preferences.stroll === true,
+    };
+  }
+  /* Landing and take-off as saved for the trip — on their real day (a night flight can land the day after the
+   * trip starts), plus the outbound departure time when a scanned ticket has it. */
+  function flightState(trip) {
+    const td = trip.travelDetails || {};
+    const inTrip = (d) => typeof d === "string" && d >= trip.start && d <= trip.end;
+    const arr = inTrip(td.arrival?.date) && HHMM.test(td.arrival?.time || "") ? td.arrival : null;
+    const dep = inTrip(td.departure?.date) && HHMM.test(td.departure?.time || "") ? td.departure : null;
+    const legs = Array.isArray(td.flights) ? td.flights : [];
+    const out =
+      arr &&
+      legs.find(
+        (l) => l && (l.arriveDate || l.date) === arr.date && (!l.arriveTime || l.arriveTime === arr.time) && l.date,
+      );
+    return {
+      arrivalDate: arr ? arr.date : trip.start,
+      arrivalTime: arr ? arr.time : "",
+      departureDate: dep ? dep.date : trip.end,
+      departureTime: dep ? dep.time : "",
+      outbound: out && HHMM.test(out.departTime || "") ? { date: out.date, time: out.departTime } : null,
+      flightsKnown: Boolean(arr || dep),
     };
   }
   function missingKeys(st, trip) {
@@ -275,6 +293,10 @@
     if (!st.hotel) miss.push("hotel");
     return miss;
   }
+  const dayChoices = (trip, selected) =>
+    TripModel.dates(trip.start, trip.end)
+      .map((d) => `<option value="${d}"${d === selected ? " selected" : ""}>${esc(dayName(d))}</option>`)
+      .join("");
   const chips = (name, list, selected, multi) =>
     `<div class="ap-chips" role="${multi ? "group" : "radiogroup"}">${list
       .map((item) => {
@@ -303,7 +325,7 @@
       q(
         "flights",
         "מתי אתם נוחתים ומתי ממריאים חזרה?",
-        `<div class="field-grid"><div class="field"><label for="apArr">שעת נחיתה ב-${esc(dayName(trip.start))}</label><input id="apArr" type="time" value="${esc(st.arrivalTime)}"></div><div class="field"><label for="apDep">שעת המראה ב-${esc(dayName(trip.end))}</label><input id="apDep" type="time" value="${esc(st.departureTime)}"></div></div><small>לא יודע עדיין? השאר ריק ואתכנן את היום הראשון והאחרון כימים מלאים.</small>`,
+        `<div class="field-grid"><div class="field"><label for="apArrDay">יום הנחיתה ביעד</label><select id="apArrDay">${dayChoices(trip, st.arrivalDate)}</select></div><div class="field"><label for="apArr">שעת הנחיתה</label><input id="apArr" type="time" value="${esc(st.arrivalTime)}"></div></div><div class="field-grid"><div class="field"><label for="apDepDay">יום הטיסה חזרה</label><select id="apDepDay">${dayChoices(trip, st.departureDate)}</select></div><div class="field"><label for="apDep">שעת ההמראה</label><input id="apDep" type="time" value="${esc(st.departureTime)}"></div></div><small>טיסת לילה שנוחתת אחרי חצות? בחר את יום הנחיתה עצמו — היום שלפניו יהיה יום הטיסה. לא יודע עדיין? השאר ריק ואתכנן את היום הראשון והאחרון כימים מלאים.</small>`,
         true,
       ),
     );
@@ -464,6 +486,9 @@
       const val = (id) => host.querySelector("#" + id)?.value ?? "";
       st.arrivalTime = val("apArr") || (st.flightsKnown ? st.arrivalTime : "");
       st.departureTime = val("apDep") || (st.flightsKnown ? st.departureTime : "");
+      if (host.querySelector("#apArrDay")) st.arrivalDate = val("apArrDay") || st.arrivalDate;
+      if (host.querySelector("#apDepDay")) st.departureDate = val("apDepDay") || st.departureDate;
+      if (st.outbound && st.outbound.date >= st.arrivalDate) st.outbound = null;
       if (host.querySelector("#apHotel")) st.hotel = val("apHotel").trim();
       st.wake = val("apWake") || st.wake;
       st.sleep = val("apSleep") || st.sleep;
@@ -697,7 +722,7 @@
       );
     onStep("משבץ כל עיר לפי אזורים, זמני הליכה ושעות פתיחה…");
     const used = new Set();
-    const merged = { dailySchedule: [], stops: [], warnings: [] };
+    const merged = { dailySchedule: [], stops: [], warnings: [], lodgingPoints: [] };
     let firstHome = null,
       rank = 0;
     for (let i = 0; i < segs.length; i++) {
@@ -718,6 +743,12 @@
       if ((!home || !Number.isFinite(home.lat)) && g.hotel) home = await geocodeHotel(g.hotel, g.city, d.cityCenter);
       if (!home) home = d.lodging;
       if (i === 0) firstHome = home;
+      merged.lodgingPoints.push({
+        name: g.hotel || g.city,
+        start: g.start,
+        end: g.end,
+        ...(home && Number.isFinite(home.lat) ? { lat: home.lat, lng: home.lng } : {}),
+      });
       const transfer = i > 0 ? transferTime(trip, g) : null;
       const r = ItineraryEngine.plan({
         start: g.start,
@@ -728,17 +759,22 @@
         meals: st.meals,
         linger: st.linger,
         stroll: st.stroll,
+        city: g.city,
+        outbound: i === 0 ? st.outbound : null,
         arrival:
           i === 0
             ? st.arrivalTime
-              ? { date: trip.start, time: st.arrivalTime }
+              ? { date: st.arrivalDate || trip.start, time: st.arrivalTime }
               : {}
             : {
                 date: g.start,
                 time: transfer,
                 label: `הגעה ${toCity(g.city)}${g.hotel ? " ונסיעה " + toCity(g.hotel) : ""}`,
               },
-        departure: i === segs.length - 1 && st.departureTime ? { date: trip.end, time: st.departureTime } : {},
+        departure:
+          i === segs.length - 1 && st.departureTime
+            ? { date: st.departureDate || trip.end, time: st.departureTime }
+            : {},
         attractions: pool,
         cityCenter: d.cityCenter,
         home: home && Number.isFinite(home.lat) ? home : null,
@@ -836,8 +872,10 @@
         meals: st.meals,
         linger: st.linger,
         stroll: st.stroll,
-        arrival: st.arrivalTime ? { date: trip.start, time: st.arrivalTime } : {},
-        departure: st.departureTime ? { date: trip.end, time: st.departureTime } : {},
+        city: trip.city,
+        outbound: st.outbound,
+        arrival: st.arrivalTime ? { date: st.arrivalDate || trip.start, time: st.arrivalTime } : {},
+        departure: st.departureTime ? { date: st.departureDate || trip.end, time: st.departureTime } : {},
         attractions,
         cityCenter: data.cityCenter,
         home: home && Number.isFinite(home.lat) ? home : null,
@@ -881,18 +919,30 @@
       }
     const travelDetails = { ...(trip.travelDetails || {}) };
     if (st.arrivalTime)
-      travelDetails.arrival = { ...(travelDetails.arrival || {}), date: trip.start, time: st.arrivalTime };
+      travelDetails.arrival = {
+        ...(travelDetails.arrival || {}),
+        date: st.arrivalDate || trip.start,
+        time: st.arrivalTime,
+      };
     if (st.departureTime)
-      travelDetails.departure = { ...(travelDetails.departure || {}), date: trip.end, time: st.departureTime };
+      travelDetails.departure = {
+        ...(travelDetails.departure || {}),
+        date: st.departureDate || trip.end,
+        time: st.departureTime,
+      };
     const tripChanges = { travelType: st.travelType.slice(0, 80), activityTypes: st.interests.slice(0, 12) };
     if (st.hotel && st.hotel !== trip.hotel) tripChanges.hotel = st.hotel.slice(0, 250);
     if (st.arrivalTime || st.departureTime) {
       const tdChange = {};
       if (st.arrivalTime)
-        tdChange.arrival = { date: trip.start, time: st.arrivalTime, airport: travelDetails.arrival?.airport || "" };
+        tdChange.arrival = {
+          date: st.arrivalDate || trip.start,
+          time: st.arrivalTime,
+          airport: travelDetails.arrival?.airport || "",
+        };
       if (st.departureTime)
         tdChange.departure = {
-          date: trip.end,
+          date: st.departureDate || trip.end,
           time: st.departureTime,
           airport: travelDetails.departure?.airport || "",
         };
@@ -933,6 +983,7 @@
       missingMust,
       lodgingName,
       lodgingPoint: home,
+      lodgingPoints: result.lodgingPoints || null,
     };
   }
 
@@ -951,7 +1002,7 @@
     const days = schedule
       .map((d, i) => {
         const places = d.blocks.filter((b) => b.placeName);
-        return `<details class="ap-day" style="animation-delay:${i * 120}ms"${i === 0 ? " open" : ""}><summary><b>${esc(dayName(d.date))}</b> · ${places.length} מקומות · ${esc(d.wakeTime)}–${esc(d.sleepTime)}<span>${esc(places.map((b) => b.activity.replace(/^ביקור:\s*/, "")).join(" · "))}</span></summary><ol class="ap-blocks">${d.blocks
+        return `<details class="ap-day" style="animation-delay:${i * 120}ms"${i === 0 ? " open" : ""}><summary><b>${esc(dayName(d.date))}</b> · ${places.length === 1 ? "מקום אחד" : places.length + " מקומות"} · ${esc(d.wakeTime)}–${esc(d.sleepTime)}<span>${esc(places.map((b) => b.activity.replace(/^ביקור:\s*/, "")).join(" · "))}</span></summary><ol class="ap-blocks">${d.blocks
           .map(
             (b) =>
               `<li class="${b.placeName ? "ap-place" : /הליכה|נסיעה|חזרה ללינה/.test(b.activity) ? "ap-move" : ""}"><time>${esc(b.startTime)}–${esc(b.endTime)}</time><span>${esc(b.activity)}</span></li>`,
@@ -1009,6 +1060,10 @@
       for (const k of keys) if (k in plan.preview.trip) trip[k] = plan.preview.trip[k];
       trip.dailySchedule = plan.schedule;
       trip.scheduleStopSnapshot = JSON.stringify(plan.preview.stops);
+      // Each night's hotel, so later edits re-time every day from the right place.
+      trip.travelDetails = { ...(trip.travelDetails || {}) };
+      if (plan.lodgingPoints?.length) trip.travelDetails.lodgingPoints = plan.lodgingPoints;
+      else delete trip.travelDetails.lodgingPoints;
       if (plan.lodgingPoint && Number.isFinite(plan.lodgingPoint.lat))
         trip.travelDetails = {
           ...(trip.travelDetails || {}),
@@ -1125,6 +1180,12 @@
     showInterview();
   }
 
+  // During the trip, the saved plan opens on today rather than on day 1.
+  function todayIn(trip) {
+    const d = new Date();
+    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    return iso >= trip.start && iso <= trip.end ? iso : null;
+  }
   function openModalFlow(request = "") {
     const trip = currentTrip();
     if (!trip) return toast("בחר טיול כדי להתחיל לתכנן");
@@ -1137,7 +1198,7 @@
       onSaved: (plan) => {
         closeModal();
         $("#modalContent").classList.remove("chat-dialog");
-        selectedDate = trip.start;
+        selectedDate = todayIn(trip) || trip.start;
         renderTrip();
         toast(`הטיול נשמר · ${plan.result.stops.length} אטרקציות ב-${plan.schedule.length} ימים`);
       },
@@ -1160,7 +1221,7 @@
       chatNote: note,
       onSaved: () => {
         ctx.panel.replaceChildren();
-        selectedDate = trip.start;
+        selectedDate = todayIn(trip) || trip.start;
         if (currentTrip()?.id === trip.id) renderTrip();
       },
     });

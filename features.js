@@ -76,7 +76,9 @@ function openPreferences() {
   $("#preferencesForm").onsubmit = (e) => {
     e.preventDefault();
     const next = {
+      ...preferences,
       pace: $("#pace").value,
+      paceChosen: true,
       interests: $("#interests").value.trim(),
       profileNotes: $("#profileNotes").value.trim().slice(0, 1500),
       restaurants: $("#restaurants").checked,

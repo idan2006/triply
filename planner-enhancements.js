@@ -381,7 +381,7 @@
     }
     let sending = false;
     openModal(
-      `<div class="chat-heading"><h2>מתכננים את ${escapeHTML(t.city)}</h2><p>אפשר להתחיל מבקשה כללית או לציין מקומות משלך. אם צריך, אשאל מה מתאים לך לפני שאציע תוכנית. שום שינוי לא יישמר בלי אישור.</p></div><div id="chatHistory" class="chat-history" role="log" aria-live="polite" aria-label="התכתבות עם מתכנן הטיול"></div><div id="proposalPanel"></div><form id="chatForm" class="chat-composer"><label for="chatMessage">מה תרצה לתכנן או לשנות?</label><textarea id="chatMessage" rows="3" maxlength="3000" required placeholder="למשל: תכנן לי טיול שמתאים לנו בניו יורק"></textarea><div class="chat-send-row"><p id="chatStatus" role="status"></p><button id="chatSend" class="primary-btn" type="submit">שליחה</button></div></form>`,
+      `<div class="chat-heading"><h2>מתכננים את ${escapeHTML(t.city)}</h2><p>אפשר להתחיל מבקשה כללית או לציין מקומות משלך. אם צריך, אשאל מה מתאים לך לפני שאציע תוכנית. שום שינוי לא יישמר בלי אישור.</p></div><div id="chatHistory" class="chat-history" role="log" aria-live="polite" aria-label="התכתבות עם מתכנן הטיול"></div><div id="proposalPanel"></div><form id="chatForm" class="chat-composer"><label for="chatMessage">מה תרצה לתכנן או לשנות?</label><textarea id="chatMessage" rows="3" maxlength="3000" required placeholder="${t.dailySchedule?.length ? "למשל: תעביר את העין של לונדון ליום שלישי בבוקר · תוסיף שוק אוכל ביום שישי · מה יש לנו מחר?" : "למשל: תכנן לי טיול שמתאים לנו בניו יורק"}"></textarea><div class="chat-send-row"><p id="chatStatus" role="status"></p><button id="chatSend" class="primary-btn" type="submit">שליחה</button></div></form>`,
     );
     $("#modalContent").classList.add("chat-dialog");
     const originalClose = closeModal;
@@ -407,7 +407,9 @@
               return `<div class="message ${m.role === "user" ? "from-user" : "from-assistant"}"><b>${m.role === "user" ? "אתה" : "מתכנן הטיול"}</b><p>${escapeHTML(m.text)}</p>${sources.length ? `<div class="maps-sources"><span>מקורות: Google Maps</span>${sources.map((source) => `<a href="${escapeHTML(source.url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(source.name)}</a>`).join("")}</div>` : ""}</div>`;
             })
             .join("")
-        : '<div class="message from-assistant"><p>ספר לי מה תרצה לעשות בטיול. אם אין לך עדיין מקומות בראש, אשאל על הסגנון שלך ואציע כיוונים.</p></div>';
+        : t.dailySchedule?.length
+          ? '<div class="message from-assistant"><p>אפשר לבקש ממני להזיז, להוסיף או להוריד מקומות, לשנות שעות ומשך ביקורים, או לשאול על התוכנית. כל שינוי יוצג לאישור, ואחרי האישור הלוח וזמני ההליכה והנסיעה מתעדכנים לבד.</p></div>'
+          : '<div class="message from-assistant"><p>ספר לי מה תרצה לעשות בטיול. אם אין לך עדיין מקומות בראש, אשאל על הסגנון שלך ואציע כיוונים.</p></div>';
       $("#chatHistory").scrollTop = $("#chatHistory").scrollHeight;
     };
     draw();
@@ -430,29 +432,12 @@
         history = $("#chatHistory"),
         panel = $("#proposalPanel");
       submit.disabled = true;
-      status.textContent = "בונה ובודק הצעה למסלול…";
+      status.textContent = "קורא את הבקשה ובודק את הלוח…";
       panel.replaceChildren();
-      const stateKeys = [
-        "city",
-        "start",
-        "end",
-        "people",
-        "participants",
-        "currency",
-        "budgetPerPerson",
-        "hotel",
-        "travelDetails",
-        "travelType",
-        "activityTypes",
-        "stops",
-        "expenses",
-        "dailySchedule",
-        "scheduleStopSnapshot",
-      ];
-      const stateSnapshot = () => JSON.stringify(Object.fromEntries(stateKeys.map((key) => [key, t[key]])));
-      let snapshot;
+      const planned = Boolean(t.dailySchedule?.length);
       t.chat.push({ role: "user", text });
-      if (window.TriplyAutoPlan && TriplyAutoPlan.wantsWholeTrip(text)) {
+      // A request for the whole trip goes to the full planner (interview → plan → preview).
+      if (window.TriplyAutoPlan && TriplyAutoPlan.wantsWholeTrip(text) && !(planned && ONE_DAY.test(text))) {
         try {
           save();
         } catch {}
@@ -465,8 +450,7 @@
         return;
       }
       try {
-        const previousMessages = t.chat.slice(-12, -1),
-          lastAssistantIndex = previousMessages.map((m) => m.role).lastIndexOf("assistant");
+        const previousMessages = t.chat.slice(-9, -1);
         const answeredDiscovery = previousMessages.some(
           (m) => m.role === "assistant" && /איך אתה אוהב לטייל|איזה סגנון טיול מתאים לך/i.test(String(m.text || "")),
         );
@@ -478,164 +462,74 @@
             text,
           );
         const remembered = answeredDiscovery || volunteeredProfile ? rememberChatProfile(text, t) : false;
-        snapshot = stateSnapshot();
         save();
         draw();
-        const recentContext = previousMessages
-          .filter((m, index) => m.role === "user" || index === lastAssistantIndex)
-          .slice(-4);
-        const originalPlanningRequest = t.chat
-          .slice(0, -1)
-          .reverse()
-          .find(
-            (m) =>
-              m.role === "user" &&
-              /(?:תכנן|תתכנן|תבנה|מסלול|אטרקציות|תוכנית|טיול מלא|תמשיך)/i.test(String(m.text || "")),
-          );
-        if (originalPlanningRequest && !recentContext.includes(originalPlanningRequest))
-          recentContext.unshift(originalPlanningRequest);
-        const conversationHistory = recentContext
-          .slice(-5)
-          .map((m) => ({ role: m.role, text: String(m.text || "").slice(0, m.role === "assistant" ? 450 : 1600) }));
-        const data = await aiCall("plan", {
-          message: text,
-          trip: {
-            id: t.id,
-            city: t.city,
-            start: t.start,
-            end: t.end,
-            people: t.people,
-            participants: t.participants,
-            currency: t.currency,
-            budgetPerPerson: t.budgetPerPerson,
-            hotel: t.hotel,
-            travelType: t.travelType,
-            activityTypes: t.activityTypes,
-            stops: t.stops,
-            travelDetails: t.travelDetails,
-            expenses: t.expenses,
-            dailySchedule: t.dailySchedule,
-          },
-          preferences,
-          history: conversationHistory,
-        });
-        if (typeof data.message !== "string" || !Array.isArray(data.operations))
-          throw Error("ה-AI לא החזיר הצעה מובנית שאפשר לבדוק.");
+        const conversation = previousMessages
+          .slice(-6)
+          .map((m) => ({ role: m.role, text: String(m.text || "").slice(0, m.role === "assistant" ? 400 : 800) }));
+        const compact = compactTrip(t);
+        const data = await askPlanner(text, compact, conversation);
         if (!history.isConnected) return;
-        let operations = data.operations;
-        const planningIntent =
-          /מסלול|תכנן|תבנה|לבנות|סדר|הכנס|תכניס|פזר|מקומות|אטרקציות|יום מלא|כל היום|קם|קימה|לישון|שינה|מהרגע|ערוך|לשנות|שנה|עדכן|תקציב|משתתף|מלון|תאריך|הוצאה/i.test(
-            text,
-          );
-        let assistantText = data.message,
-          preview = null;
-        let schedule = null;
-        const proposalData = {
-          operations,
-          tripChanges: data.tripChanges || {},
-          participants: data.participants,
-          expenseOperations: data.expenseOperations || [],
-        };
-        const hasProposedData =
-          operations.length ||
-          Object.keys(proposalData.tripChanges).length ||
-          proposalData.participants !== undefined ||
-          proposalData.expenseOperations.length;
-        if (hasProposedData || (Array.isArray(data.dailySchedule) && data.dailySchedule.length))
-          preview = TripPlanning.apply(t, proposalData);
-        if (Array.isArray(data.dailySchedule) && data.dailySchedule.length) {
-          try {
-            schedule = TripPlanning.validateSchedule(preview?.trip || t, data.dailySchedule);
-            if (preview)
-              for (const day of schedule)
-                for (const block of day.blocks)
-                  if (block.placeName && !block.existingStopId) {
-                    const added = preview.stops.find(
-                      (stop) =>
-                        stop.date === day.date &&
-                        stop.time === block.startTime &&
-                        stop.name.toLocaleLowerCase() === block.placeName.toLocaleLowerCase(),
-                    );
-                    if (added) block.existingStopId = added.id;
-                  }
-          } catch {
-            schedule = null;
-          }
-        }
-        if (!schedule) {
-          const recovered = TripPlanning.recoverScheduleFromMessage(t, data.message, operations);
-          if (recovered) {
-            operations = recovered.operations;
-            proposalData.operations = operations;
-            preview = TripPlanning.apply(t, proposalData);
-            schedule = TripPlanning.validateSchedule(preview.trip, recovered.dailySchedule);
-            assistantText +=
-              "\n\nשחזרתי את מבנה הלוח מתוך ההצעה ובדקתי שכל הימים והתחנות מכוסים. אפשר לבדוק ולאשר למטה; שום דבר לא נשמר עדיין.";
-          }
-        }
+        const proposal = await buildProposal(t, data, compact);
+        let assistantText = String(data.message || "").trim();
         if (remembered) assistantText += "\n\nשמרתי את ההעדפות האלה לטיולים הבאים במכשיר הזה. אפשר לשנות אותן בהגדרות.";
-        if (preview?.changes.length || schedule) {
+        if (proposal.error) {
           assistantText +=
             (assistantText ? "\n\n" : "") +
-            `הכנתי הצעה לבדיקה${schedule ? " עם לוח מלא ל־" + schedule.length + " ימים" : ""}. שום פרט לא יישמר עד שתאשר; אחרי השמירה אפשר לערוך את כל המקטעים והתחנות.`;
-        } else if (planningIntent && !data.needsInput && !/[?؟]/.test(assistantText)) {
-          operations = [];
+            `לא הצלחתי להכניס את השינוי ללוח: ${proposal.error} אפשר לנסח אחרת, או לערוך ידנית בלחיצה על השורה בלוח.`;
+        } else if (proposal.lines.length) {
           assistantText +=
             (assistantText ? "\n\n" : "") +
-            "לא נוצר שינוי בפועל במסלול. התוכנית המפורטת מופיעה למעלה; אם תרצה לשנות גם את המקומות, הימים או השעות במפה, כתוב לי בדיוק מה להזיז.";
+            "הכנתי הצעה לבדיקה למטה. שום דבר לא נשמר עד שתאשר; אחרי השמירה אפשר להמשיך לערוך הכל.";
+        } else if (proposal.ignored) {
+          assistantText +=
+            (assistantText ? "\n\n" : "") +
+            "לא נוצר שינוי במסלול. אם רצית לשנות משהו, כתוב לי בדיוק מה להזיז, להוסיף או להסיר.";
         }
         t.chat.push({
           role: "assistant",
-          text: assistantText,
+          text: assistantText || "לא הבנתי את הבקשה. אפשר לנסח אותה אחרת?",
           sources: Array.isArray(data.sources) ? data.sources : [],
         });
         save();
         draw();
         status.textContent = "";
-        if (preview && (preview.changes.length || schedule)) {
-          panel.innerHTML = `<h3>הצעה לשינויים · ${preview.changes.length} פרטים${schedule ? " ולוח יום מלא" : ""}</h3><ul>${preview.changes.map((x) => "<li>" + escapeHTML(x) + "</li>").join("")}${schedule ? "<li>לוח זמנים ל־" + schedule.length + " ימים, מהקימה ועד השינה</li>" : ""}</ul><p>בדוק את ההצעה. שום דבר לא משתנה עד לאישור. אחרי השמירה תוכל לערוך כל מקום ומקטע בלוח. שעות פתיחה וזמני מעבר לא אומתו בזמן אמת.</p><div class="modal-actions"><button id="rejectProposal" class="secondary-btn">ביטול ההצעה</button><button id="acceptProposal" class="primary-btn">אישור ועדכון הטיול</button></div>`;
-          $("#rejectProposal").onclick = () => {
+        if (proposal.error || !proposal.lines.length) return;
+        panel.innerHTML = `<h3>הצעה לשינויים · ${proposal.lines.length} פרטים</h3><ul>${proposal.lines.map((x) => "<li>" + escapeHTML(x) + "</li>").join("")}</ul>${proposal.warnings.map((w) => `<p class="ap-warn">⚠ ${escapeHTML(w)}</p>`).join("")}<p>בדוק את ההצעה. שום דבר לא משתנה עד לאישור. זמני ההליכה והנסיעה ושעות הפתיחה הם הערכה.</p><div class="modal-actions"><button id="rejectProposal" class="secondary-btn">ביטול ההצעה</button><button id="acceptProposal" class="primary-btn">אישור ועדכון הטיול</button></div>`;
+        panel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        $("#rejectProposal").onclick = () => {
+          panel.replaceChildren();
+          status.textContent = "ההצעה בוטלה; המסלול נשאר ללא שינוי.";
+        };
+        $("#acceptProposal").onclick = () => {
+          const res = window.TriplyReflow.apply(t, proposal.prepared);
+          if (!res.ok) {
+            status.textContent = res.message || "לא ניתן לשמור את השינוי. הטיול הקודם נשמר.";
             panel.replaceChildren();
-            status.textContent = "ההצעה בוטלה; המסלול נשאר ללא שינוי.";
-          };
-          $("#acceptProposal").onclick = () => {
-            if (stateSnapshot() !== snapshot) {
-              status.textContent = "פרטי הטיול השתנו מאז ההצעה. שלח בקשה חדשה כדי למנוע דריסה.";
-              panel.replaceChildren();
-              return;
-            }
-            const before = Object.fromEntries(stateKeys.map((key) => [key, structuredClone(t[key])]));
-            try {
-              for (const key of stateKeys) t[key] = preview.trip[key];
-              if (schedule) {
-                t.dailySchedule = schedule;
-                t.scheduleStopSnapshot = JSON.stringify(preview.stops);
-              } else if (t.dailySchedule?.length) t.scheduleStopSnapshot = "";
-              save();
-              panel.replaceChildren();
-              status.textContent = schedule
-                ? "הטיול ולוח הימים נשמרו. אפשר לערוך כל מקטע בלוח."
-                : `${preview.changes.length} השינויים נשמרו בטיול.`;
-              if (currentTrip()?.id === t.id) {
-                const firstProposed = preview.stops
-                  .filter((s) => operations.some((op) => op.type === "add" && op.name === s.name))
-                  .sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time))[0];
-                if (firstProposed) selectedDate = firstProposed.date;
-                if (!TripModel.dates(t.start, t.end).includes(selectedDate)) selectedDate = t.start;
-                renderTrip();
-              }
-            } catch {
-              for (const key of stateKeys) t[key] = before[key];
-              status.textContent = "לא ניתן לשמור את השינוי. הטיול הקודם נשמר.";
-            }
-          };
-        }
+            return;
+          }
+          panel.replaceChildren();
+          status.textContent = proposal.changedDays
+            ? "השינויים נשמרו, והלוח וזמני הדרך עודכנו."
+            : `${proposal.lines.length} השינויים נשמרו בטיול.`;
+          t.chat.push({ role: "assistant", text: "✓ השינויים נשמרו בטיול." });
+          try {
+            save();
+          } catch {}
+          draw();
+          if (currentTrip()?.id === t.id) {
+            const first = proposal.focusDate;
+            if (first && TripModel.dates(t.start, t.end).includes(first)) selectedDate = first;
+            if (!TripModel.dates(t.start, t.end).includes(selectedDate)) selectedDate = t.start;
+            renderTrip();
+          }
+        };
       } catch (err) {
         if (status.isConnected) {
           const message = err.message || "הבקשה נכשלה. נסה שוב.";
           t.chat.push({
             role: "assistant",
-            text: `לא הצלחתי להשלים את הבקשה: ${message} ההודעה נשארה בהיסטוריה, ותיבת הכתיבה נוקתה.`,
+            text: `לא הצלחתי להשלים את הבקשה: ${message}`,
           });
           try {
             save();
@@ -647,6 +541,308 @@
         sending = false;
         if (submit.isConnected) submit.disabled = false;
       }
+    };
+  }
+
+  /* ---------- What the chat sends: a short summary of the trip, not the whole saved data ---------- */
+  const ONE_DAY =
+    /(?:ב|ל)?יום\s+(?:ה?(?:ראשון|שני|שלישי|רביעי|חמישי|שישי|שבת|אחרון)|\d{1,2})|\bמחר\b|\bהיום\b|ב-?\d{1,2}[./]\d{1,2}/;
+  function compactTrip(t) {
+    const ids = new Map(),
+      back = new Map();
+    t.stops.forEach((s, i) => {
+      ids.set(s.id, "s" + (i + 1));
+      back.set("s" + (i + 1), s.id);
+    });
+    const pids = new Map(),
+      pback = new Map();
+    (t.participants || []).forEach((p, i) => {
+      pids.set(p.id, "p" + (i + 1));
+      pback.set("p" + (i + 1), p.id);
+    });
+    const eids = new Map(),
+      eback = new Map();
+    (t.expenses || []).forEach((x, i) => {
+      eids.set(x.id, "e" + (i + 1));
+      eback.set("e" + (i + 1), x.id);
+    });
+    const L = window.TriplyDayLayout;
+    const days = (t.dailySchedule || []).map((d) => ({
+      date: d.date,
+      wake: d.wakeTime,
+      sleep: d.sleepTime,
+      items: d.blocks
+        .filter((b) => (L ? L.roleOf(b) !== "travel" : true))
+        .map((b) => {
+          const id = b.existingStopId && ids.get(b.existingStopId);
+          return `${b.startTime}-${b.endTime} ${id ? `[${id}] ` : ""}${String(b.activity || "").slice(0, 70)}`;
+        })
+        .slice(0, 30),
+    }));
+    const td = t.travelDetails || {};
+    const pts = t.stops.filter((s) => Number.isFinite(Number(s.lat)) && Number.isFinite(Number(s.lng)));
+    const center = pts.length
+      ? { lat: pts.reduce((a, s) => a + +s.lat, 0) / pts.length, lng: pts.reduce((a, s) => a + +s.lng, 0) / pts.length }
+      : td.lodgingPoint && Number.isFinite(Number(td.lodgingPoint.lat))
+        ? { lat: +td.lodgingPoint.lat, lng: +td.lodgingPoint.lng }
+        : null;
+    return {
+      ids,
+      back,
+      pback,
+      eback,
+      trip: {
+        city: t.city,
+        start: t.start,
+        end: t.end,
+        people: t.people,
+        currency: t.currency,
+        hotel: t.hotel,
+        travelType: t.travelType,
+        activityTypes: (t.activityTypes || []).slice(0, 12),
+        arrival: td.arrival ? { date: td.arrival.date || "", time: td.arrival.time || "" } : {},
+        departure: td.departure ? { date: td.departure.date || "", time: td.departure.time || "" } : {},
+        center,
+      },
+      days,
+      stops: t.stops.slice(0, 120).map((s) => ({
+        id: ids.get(s.id),
+        name: String(s.name || "").slice(0, 90),
+        he: String(s.notes || "")
+          .split(" · ")[0]
+          .slice(0, 50),
+        date: s.date,
+        time: s.time,
+        duration: s.duration,
+      })),
+      participants: (t.participants || []).map((p) => ({ id: pids.get(p.id), name: p.name, budget: p.budget })),
+      expenses: (t.expenses || []).slice(0, 40).map((x) => ({
+        id: eids.get(x.id),
+        name: String(x.name || "").slice(0, 60),
+        amount: x.amount,
+        shared: x.shared !== false,
+        person: x.personalParticipantId ? pids.get(x.personalParticipantId) || "" : "",
+      })),
+    };
+  }
+  /* The "edit" mode of the server answers with small change lists; an older server only knows "plan" —
+   * then the same short summary goes there (without the day plan, so it never hits the size limit). */
+  async function askPlanner(text, c, conversation) {
+    const pref = {
+      pace: preferences.pace,
+      interests: String(preferences.interests || "").slice(0, 300),
+      profileNotes: String(preferences.profileNotes || "").slice(0, 600),
+    };
+    try {
+      return await aiCall("edit", {
+        message: text,
+        trip: c.trip,
+        days: c.days,
+        stops: c.stops,
+        participants: c.participants,
+        expenses: c.expenses,
+        preferences: pref,
+        history: conversation,
+      });
+    } catch (err) {
+      if (!/בקשה לא תקינה/.test(String(err?.message || ""))) throw err;
+    }
+    const data = await aiCall("plan", {
+      message: text,
+      trip: {
+        city: c.trip.city,
+        start: c.trip.start,
+        end: c.trip.end,
+        people: c.trip.people,
+        currency: c.trip.currency,
+        hotel: c.trip.hotel,
+        travelType: c.trip.travelType,
+        activityTypes: c.trip.activityTypes,
+        travelDetails: { arrival: c.trip.arrival, departure: c.trip.departure },
+        participants: c.participants,
+        stops: c.stops.map((s) => ({
+          id: s.id,
+          name: s.name,
+          date: s.date,
+          time: s.time,
+          duration: s.duration,
+          notes: "",
+        })),
+        expenses: [],
+        dailySchedule: [],
+      },
+      preferences: pref,
+      history: conversation,
+    });
+    return { ...data, fromPlan: true };
+  }
+
+  /* Without a day plan: the first free time on that day (after the last place + 30 minutes, from 10:00). */
+  function freeTimeOn(trip, date) {
+    const toMin = (v) => Number(v.slice(0, 2)) * 60 + Number(v.slice(3));
+    const end = trip.stops
+      .filter((s) => s.date === date && /^\d{2}:\d{2}$/.test(s.time))
+      .reduce((m, s) => Math.max(m, toMin(s.time) + (Number(s.duration) || 60) + 30), 10 * 60);
+    const v = Math.min(end, 21 * 60);
+    return `${String(Math.floor(v / 60)).padStart(2, "0")}:${String(v % 60).padStart(2, "0")}`;
+  }
+  /* ---------- Turning the answer into a checked proposal (nothing is saved here) ---------- */
+  const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/;
+  async function buildProposal(t, data, c) {
+    if (!data || typeof data !== "object") return { error: "התשובה לא הייתה תקינה.", lines: [], warnings: [] };
+    const ops = Array.isArray(data.operations) ? data.operations.slice(0, 25) : [];
+    const dates = TripModel.dates(t.start, t.end);
+    const hints = {};
+    const lines = [];
+    let ignored = 0;
+    const realId = (id) => c.back.get(String(id || "")) || (t.stops.some((s) => s.id === id) ? id : null);
+    const touched = new Map(); // stop id → { kind, before }
+    const mutate = (draft) => {
+      // Trip details, people and expenses keep using the app's own validator.
+      const extra = {};
+      if (data.tripChanges && typeof data.tripChanges === "object" && Object.keys(data.tripChanges).length)
+        extra.tripChanges = data.tripChanges;
+      if (Array.isArray(data.participants) && data.participants.length)
+        extra.participants = data.participants.map((p) => ({ ...p, id: c.pback.get(String(p.id || "")) || "" }));
+      if (Array.isArray(data.expenseOperations) && data.expenseOperations.length)
+        extra.expenseOperations = data.expenseOperations.map((x) => ({
+          ...x,
+          id: c.eback.get(String(x.id || "")) || "",
+          personalParticipantId: c.pback.get(String(x.personalParticipantId || x.person || "")) || "",
+        }));
+      if (Object.keys(extra).length) {
+        const p = TripPlanning.apply(draft, { operations: [], ...extra });
+        for (const k of [
+          "city",
+          "start",
+          "end",
+          "people",
+          "currency",
+          "budgetPerPerson",
+          "hotel",
+          "travelType",
+          "activityTypes",
+          "travelDetails",
+          "participants",
+          "expenses",
+          "dailySchedule",
+          "scheduleStopSnapshot",
+        ])
+          draft[k] = p.trip[k];
+        lines.push(...p.changes);
+      }
+      for (const op of ops) {
+        if (!op || !["add", "update", "remove", "move"].includes(op.type)) {
+          ignored++;
+          continue;
+        }
+        if (op.type === "add") {
+          const name = String(op.name || "")
+            .trim()
+            .slice(0, 200);
+          if (!name) {
+            ignored++;
+            continue;
+          }
+          const date = dates.includes(op.date) ? op.date : dates.includes(selectedDate) ? selectedDate : dates[0];
+          const time = HHMM.test(String(op.time || "")) ? op.time : "";
+          const dur = Number(op.duration);
+          const st = {
+            id: crypto.randomUUID(),
+            name,
+            date,
+            time: time || (draft.dailySchedule?.length ? "12:00" : freeTimeOn(draft, date)),
+            duration: Number.isFinite(dur) && dur >= 10 && dur <= 600 ? Math.round(dur) : 60,
+            notes: String(op.notes || "").slice(0, 500),
+          };
+          if (Number.isFinite(Number(op.lat)) && Number.isFinite(Number(op.lng))) {
+            st.lat = Number(op.lat);
+            st.lng = Number(op.lng);
+          }
+          draft.stops.push(st);
+          hints[st.id] = time ? "time" : "auto";
+          touched.set(st.id, { kind: "add" });
+          continue;
+        }
+        const id = realId(op.id);
+        const st = id && draft.stops.find((s) => s.id === id);
+        if (!st) {
+          ignored++;
+          continue;
+        }
+        if (op.type === "remove") {
+          draft.stops = draft.stops.filter((s) => s.id !== id);
+          touched.set(id, { kind: "remove", name: st.name });
+          continue;
+        }
+        const before = { ...st };
+        // A different place instead of this one only when the planner says so explicitly (newName);
+        // `name` in an update is just the planner repeating which place it means.
+        const newName = String(op.newName || "").trim();
+        if (newName && newName.toLocaleLowerCase() !== st.name.toLocaleLowerCase()) {
+          st.name = newName.slice(0, 200);
+          delete st.lat;
+          delete st.lng;
+          if (Number.isFinite(Number(op.lat)) && Number.isFinite(Number(op.lng))) {
+            st.lat = Number(op.lat);
+            st.lng = Number(op.lng);
+          }
+        }
+        const newDate = dates.includes(op.date) ? op.date : st.date;
+        const newTime = HHMM.test(String(op.time || "")) ? op.time : "";
+        const dur = Number(op.duration);
+        if (Number.isFinite(dur) && dur >= 10 && dur <= 600) st.duration = Math.round(dur);
+        const dayChanged = newDate !== st.date;
+        st.date = newDate;
+        if (newTime && newTime !== st.time) {
+          st.time = newTime;
+          hints[id] = "time";
+        } else if (dayChanged) hints[id] = "auto";
+        else hints[id] = "keep";
+        if (
+          JSON.stringify([before.name, before.date, before.time, before.duration]) ===
+          JSON.stringify([st.name, st.date, st.time, st.duration])
+        ) {
+          delete hints[id];
+          continue;
+        }
+        touched.set(id, { kind: "update", before });
+      }
+    };
+    const prepared = await window.TriplyReflow.prepare(t, mutate, { hints });
+    if (!prepared.ok) return { error: prepared.message || "השינוי לא תקין.", lines: [], warnings: [] };
+    const label = (st) => (st ? `${st.name} · ${window.TriplyReflow.dayShort(st.date)} בשעה ${st.time}` : "");
+    for (const [id, x] of touched) {
+      const st = prepared.trip.stops.find((s) => s.id === id);
+      if (x.kind === "add") lines.push("הוספה: " + label(st));
+      else if (x.kind === "remove") lines.push("הסרה: " + x.name);
+      else if (st) {
+        const what = [];
+        if (st.name !== x.before.name) what.push(`שם: ${x.before.name} ← ${st.name}`);
+        if (st.date !== x.before.date || st.time !== x.before.time)
+          what.push(
+            `${window.TriplyReflow.dayShort(x.before.date)} ${x.before.time} ← ${window.TriplyReflow.dayShort(st.date)} ${st.time}`,
+          );
+        if (Number(st.duration) !== Number(x.before.duration))
+          what.push(`משך ${x.before.duration} ← ${st.duration} דק'`);
+        lines.push(`עדכון: ${x.before.name}${what.length ? " · " + what.join(" · ") : ""}`);
+      }
+    }
+    if (prepared.changed?.length)
+      lines.push(
+        `הלוח וזמני ההליכה והנסיעה יחושבו מחדש ב${prepared.changed.length === 1 ? "יום " + window.TriplyReflow.dayShort(prepared.changed[0]) : "-" + prepared.changed.length + " ימים"}`,
+      );
+    const focus = [...touched.keys()]
+      .map((id) => prepared.trip.stops.find((s) => s.id === id))
+      .filter(Boolean)
+      .sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time))[0];
+    return {
+      prepared,
+      lines: touched.size || lines.length ? lines : [],
+      warnings: prepared.warnings || [],
+      changedDays: prepared.changed?.length || 0,
+      focusDate: focus?.date || prepared.changed?.[0] || null,
+      ignored: ignored && !touched.size,
     };
   }
 

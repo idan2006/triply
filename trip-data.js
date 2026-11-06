@@ -367,15 +367,20 @@ function renderBudget() {
       .join(
         "",
       )}</div><button class="secondary-btn" id="managePeopleBtn">שינוי שמות המשתתפים</button><button class="secondary-btn" id="editBudgetBtn">עריכת התקציב</button><button class="primary-btn" id="expenseBtn">＋ הוספת הוצאה</button><div id="expenseList">${t.expenses.map((e) => `<div class="member-row"><div><b>${escapeHTML(e.name)}</b><p>${e.amount.toFixed(2)} ${escapeHTML(t.currency)} · ${e.shared ? "משותפת · " + t.participants.map((p) => `${escapeHTML(p.name)} ${Number(e.splits?.[p.id] || 0).toFixed(2)}`).join(" · ") : "אישית · " + escapeHTML(t.participants.find((p) => p.id === e.personalParticipantId)?.name || t.participants.find((p) => e.splits?.[p.id])?.name || "משתתף")}</p>${e.originalCurrency && e.originalCurrency !== t.currency ? `<p>${(Number(e.originalAmount) || 0).toFixed(2)} ${escapeHTML(e.originalCurrency)} · שער ${escapeHTML(e.rate)} מתאריך ${escapeHTML(e.rateDate)} (Frankfurter)</p>` : ""}</div><div class="expense-actions"><button type="button" data-edit-expense="${escapeHTML(e.id)}">עריכה</button><button type="button" data-delete-expense="${escapeHTML(e.id)}" aria-label="מחיקת ${escapeHTML(e.name)}">מחיקה</button></div></div>`).join("")}</div>`;
-  $("#editBudgetBtn").onclick = () => tripForm(true);
+  $("#editBudgetBtn").onclick = () => tripForm(true, 3); // straight to the people & budgets step
   $("#managePeopleBtn").onclick = () => {
     openModal(
       `<h2>שמות המשתתפים</h2><form id="peopleForm">${t.participants.map((p, i) => `<div class="field"><label for="person${i}">משתתף ${i + 1}</label><input id="person${i}" maxlength="80" value="${escapeHTML(p.name)}" required></div>`).join("")}<p id="peopleError" role="alert"></p><button class="primary-btn">שמירת שמות</button></form>`,
     );
     $("#peopleForm").onsubmit = (e) => {
       e.preventDefault();
+      const names = t.participants.map((_, i) => $("#person" + i).value.trim());
+      if (names.some((n) => !n)) {
+        $("#peopleError").textContent = "צריך שם לכל משתתף.";
+        return;
+      }
       const before = t.participants;
-      t.participants = t.participants.map((p, i) => ({ ...p, name: $("#person" + i).value.trim() }));
+      t.participants = t.participants.map((p, i) => ({ ...p, name: names[i] }));
       try {
         save();
         closeModal();
@@ -408,7 +413,10 @@ function renderBudget() {
         originalCurrency = $("#expenseCurrency").value,
         name = $("#expenseName").value.trim(),
         shared = $("#expenseShared").value === "shared";
-      if (!name || !Number.isFinite(originalAmount) || originalAmount <= 0) return;
+      if (!name || !Number.isFinite(originalAmount) || originalAmount <= 0) {
+        error.textContent = !name ? "כתוב על מה ההוצאה." : "בדוק את הסכום.";
+        return;
+      }
       button.disabled = true;
       error.textContent = "בודק ושומר…";
       try {

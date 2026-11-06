@@ -235,6 +235,7 @@
           else {
             viewAll = false;
             selectedDate = b.dataset.mapDay;
+            renderTrip(); // the itinerary tab and "＋ הוספה" follow the day chosen on the map
           }
           void showDayMap();
         }),
@@ -243,11 +244,29 @@
     if (on) on.scrollIntoView({ block: "nearest", inline: "center" });
   }
 
-  async function homeOf(trip, center) {
-    const lodging = trip.travelDetails?.lodgingPoint;
-    if (valid(lodging))
-      return { name: trip.hotel || "המלון", pt: { lat: Number(lodging.lat), lng: Number(lodging.lng) }, home: true };
+  async function homeOf(trip, center, date) {
+    const td = trip.travelDetails || {};
+    const night = (Array.isArray(td.lodgingPoints) ? td.lodgingPoints : []).find(
+      (p) => p && date && p.start <= date && date <= p.end,
+    );
+    if (night && valid(night))
+      return { name: night.name || trip.hotel || "המלון", pt: { lat: +night.lat, lng: +night.lng }, home: true };
+    const hotels = (Array.isArray(td.hotels) ? td.hotels : []).filter((h) => h && h.name && h.checkIn && h.checkOut);
+    const stay = date && hotels.length > 1 ? hotels.find((h) => h.checkIn <= date && date < h.checkOut) : null;
+    if (stay)
+      return { name: stay.name, pt: await geocode(`${stay.name} ${stay.city || trip.city}`, center), home: true };
+    const lodging = td.lodgingPoint;
+    const sameHotel =
+      !lodging?.name || !trip.hotel || lodging.name.trim().toLowerCase() === trip.hotel.trim().toLowerCase();
+    if (valid(lodging) && sameHotel)
+      return {
+        name: trip.hotel || lodging.name || "המלון",
+        pt: { lat: Number(lodging.lat), lng: Number(lodging.lng) },
+        home: true,
+      };
     if (trip.hotel) return { name: trip.hotel, pt: await geocode(`${trip.hotel} ${trip.city}`, center), home: true };
+    if (valid(lodging))
+      return { name: lodging.name || "המלון", pt: { lat: Number(lodging.lat), lng: Number(lodging.lng) }, home: true };
     return null;
   }
 
@@ -258,7 +277,7 @@
     const days = TripModel.dates(trip.start, trip.end);
     $("#dayMapSubtitle").textContent = `כל הטיול · ${trip.city}`;
     status.textContent = "מאתר את המקומות…";
-    const home = await homeOf(trip, center);
+    const home = await homeOf(trip, center, trip.start);
     const bounds = [];
     if (valid(home?.pt)) {
       L.marker([home.pt.lat, home.pt.lng], { icon: pin(L, "🏨", true), title: home.name })
@@ -268,6 +287,7 @@
     }
     let html = "",
       total = 0;
+    const shownHomes = new Set();
     for (let di = 0; di < days.length; di++) {
       const date = days[di],
         color = DAY_COLORS[di % DAY_COLORS.length];
@@ -282,8 +302,24 @@
           .addTo(layer)
           .bindPopup(`<b>${escapeHTML(s.name)}</b><br>יום ${di + 1} · ${escapeHTML(s.time)}`);
       }
+      // Each day starts and ends at that night's hotel (trips with several hotels or cities).
+      const dayHome = await homeOf(trip, center, date);
+      if (
+        valid(dayHome?.pt) &&
+        !(valid(home?.pt) && dayHome.pt.lat === home.pt.lat && dayHome.pt.lng === home.pt.lng)
+      ) {
+        if (!shownHomes.has(`${dayHome.pt.lat},${dayHome.pt.lng}`)) {
+          shownHomes.add(`${dayHome.pt.lat},${dayHome.pt.lng}`);
+          L.marker([dayHome.pt.lat, dayHome.pt.lng], { icon: pin(L, "🏨", true), title: dayHome.name })
+            .addTo(layer)
+            .bindPopup(escapeHTML(dayHome.name));
+          bounds.push([dayHome.pt.lat, dayHome.pt.lng]);
+        }
+      }
       const path =
-        valid(home?.pt) && pts.length ? [[home.pt.lat, home.pt.lng], ...pts, [home.pt.lat, home.pt.lng]] : pts;
+        valid(dayHome?.pt) && pts.length
+          ? [[dayHome.pt.lat, dayHome.pt.lng], ...pts, [dayHome.pt.lat, dayHome.pt.lng]]
+          : pts;
       if (path.length > 1) L.polyline(path, { color, weight: 3, opacity: 0.75 }).addTo(layer);
       total += stops.length;
       html += `<li class="map-day-row" data-go-day="${date}"><span style="background:${color}">${di + 1}</span><div><b>יום ${di + 1} · ${escapeHTML(dateLabel(date))}</b><small>${
@@ -301,6 +337,7 @@
         (li.onclick = () => {
           viewAll = false;
           selectedDate = li.dataset.goDay;
+          renderTrip();
           void showDayMap();
         }),
     );
@@ -351,7 +388,7 @@
       }
       status.textContent = "מאתר את המקומות…";
       const plan = plannedLegs(trip, selectedDate);
-      const home = await homeOf(trip, center);
+      const home = await homeOf(trip, center, selectedDate);
       const points = [];
       for (const stop of stops) points.push({ name: stop.name, stop, pt: await pointOf(stop, trip, center) });
       const route = [...(home ? [home] : []), ...points, ...(home ? [{ ...home, back: true }] : [])];
@@ -450,7 +487,7 @@
             ? " · חלק מהזמנים לפי התכנון, השאר הערכה"
             : " · זמני דרך משוערים";
       status.textContent =
-        `${points.length} תחנות · כ-${totalKm.toFixed(1)} ק״מ · ${totalMin} דק' בדרך${source}` +
+        `${points.length === 1 ? "תחנה אחת" : points.length + " תחנות"} · כ-${totalKm.toFixed(1)} ק״מ · ${totalMin} דק' בדרך${source}` +
         (missing ? ` · ${missing} מקומות לא נמצאו על המפה` : "");
     } catch (error) {
       status.textContent = error.message || "לא ניתן להציג את המפה כרגע.";
@@ -505,14 +542,19 @@
     );
     const input = $("#stopName");
     const results = $("#placeSuggestions");
-    // A visit that is part of the day plan keeps its day, time and length there (the plan editor moves the rest of the day too).
-    if (old && window.TriplySchedule?.isLinked?.(trip, old)) {
-      for (const sel of ["#stopDate", "#stopTime", "#duration"]) $(sel).disabled = true;
+    // With a day plan, a place is fitted into the plan: the rest of the day and the walking/transit times follow.
+    const planned = Boolean(trip.dailySchedule?.length) && Boolean(window.TriplySchedule?.run);
+    if (planned) {
+      if (!old) {
+        $("#stopTime").required = false;
+        $("#stopTime").value = "";
+        $('label[for="stopTime"]').textContent = "שעה (לא חובה)";
+      }
       $("#duration")
         .closest(".field")
         .insertAdjacentHTML(
           "afterend",
-          '<p class="muted">היום, השעה ומשך הביקור נקבעים בלוח היום. כדי לשנות אותם, לוחצים על השורה של המקום בלוח.</p>',
+          `<p class="muted">${old ? "שינוי היום, השעה או המשך יזיז את המקום בלוח היום, וזמני ההליכה והנסיעה יחושבו מחדש." : "בלי שעה — המקום ישובץ במקום הכי נוח ביום (הכי מעט הליכה ונסיעה). עם שעה — הוא ייכנס בשעה הזו, ושאר היום יסתדר סביבו."}</p>`,
         );
     }
     input.oninput = () => {
@@ -590,6 +632,27 @@
         $("#stopError").textContent = "בדוק את שם המקום ואת התאריך.";
         return;
       }
+      if (planned) {
+        const noTime = !next.time;
+        if (noTime) next.time = "12:00";
+        const changedDay = old && old.date !== next.date,
+          changedTime = old ? old.time !== next.time : !noTime;
+        const hint = noTime ? "auto" : changedTime ? "time" : changedDay ? "auto" : "keep";
+        const button = event.submitter;
+        if (button) button.disabled = true;
+        window.TriplySchedule.run(
+          trip,
+          (draft) => {
+            draft.stops = old ? draft.stops.map((stop) => (stop.id === old.id ? next : stop)) : [...draft.stops, next];
+          },
+          { hints: { [next.id]: hint }, goTo: next.date },
+          old ? "המקום עודכן" : "המקום נוסף ללוח",
+        ).then((res) => {
+          if (!res.ok && $("#stopError")) $("#stopError").textContent = res.message || "השמירה נכשלה.";
+          if (button?.isConnected) button.disabled = false;
+        });
+        return;
+      }
       const before = trip.stops;
       trip.stops = old ? trip.stops.map((stop) => (stop.id === old.id ? next : stop)) : [...trip.stops, next];
       try {
@@ -607,6 +670,18 @@
     if (old)
       $("#removeStop").onclick = () => {
         if (!confirm("למחוק את התחנה מהטיול?")) return;
+        if (planned) {
+          // The day is re-timed without it, and the walk from the place before to the place after is recomputed.
+          window.TriplySchedule.run(
+            trip,
+            (draft) => {
+              draft.stops = draft.stops.filter((stop) => stop.id !== old.id);
+            },
+            {},
+            `${old.name} נמחק מהטיול`,
+          );
+          return;
+        }
         const before = trip.stops,
           beforeSchedule = structuredClone(trip.dailySchedule || []),
           beforeSnapshot = trip.scheduleStopSnapshot;

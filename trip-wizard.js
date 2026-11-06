@@ -27,13 +27,14 @@
     return out;
   };
 
-  function tripWizard(edit) {
+  function tripWizard(edit, startStep) {
     var t = edit ? currentTrip() : null;
     var mode = t ? "manual" : "",
-      step = t ? 2 : 1,
+      step = t ? (startStep === 3 ? 3 : 2) : 1,
       scanned = !!t;
     var scannedDetails = Object.assign({}, (t && t.travelDetails) || {}),
-      prepaidRows = [];
+      prepaidRows = [],
+      removedPrepaid = {};
     var peopleDraft = t
       ? t.participants.map(function (p) {
           return { id: p.id, name: p.name, budget: String(p.budget == null ? t.budgetPerPerson : p.budget) };
@@ -124,7 +125,9 @@
       });
       $$("[data-prepaid-remove]").forEach(function (button) {
         button.onclick = function () {
-          prepaidRows.splice(Number(button.dataset.prepaidRemove), 1);
+          var gone = prepaidRows.splice(Number(button.dataset.prepaidRemove), 1)[0];
+          // A row the traveller removed does not come back when another document is scanned.
+          if (gone && gone.key) removedPrepaid[gone.key] = true;
           showPrepaid();
         };
       });
@@ -237,6 +240,7 @@
         scanned = false;
         scannedDetails = {};
         prepaidRows = [];
+        removedPrepaid = {};
         docs = { flight: [], hotel: [] };
         dirty = {};
         renderDocs();
@@ -565,12 +569,13 @@
           else skipped.push(h);
         });
         if (!(x.flights || []).length && docHotels.length && away.length === docHotels.length) return;
-        (x.prepaidExpenses || []).forEach(function (p) {
+        (x.prepaidExpenses || []).forEach(function (p, i) {
           prepaid.push({
             name: p.name,
             amount: p.amount == null ? "" : String(p.amount),
             currency: p.currency || "",
             docId: d.id,
+            key: d.id + ":" + i,
           });
         });
         if (x.people > people) people = x.people;
@@ -616,11 +621,25 @@
         peopleDraft = peopleDraft.slice(0, Math.max(count, peopleDraft.length));
         $("#newPeople").value = peopleDraft.length;
       }
-      prepaidRows = prepaidRows
+      // Rows typed by hand stay; rows from a document keep the traveller's corrections (same document and line),
+      // rows he removed stay removed, and rows of a document that was taken out disappear.
+      var oldRows = prepaidRows;
+      prepaidRows = oldRows
         .filter(function (r) {
           return !r.docId;
         })
-        .concat(prepaid);
+        .concat(
+          prepaid
+            .filter(function (p) {
+              return !removedPrepaid[p.key];
+            })
+            .map(function (p) {
+              var kept = oldRows.find(function (r) {
+                return r.key && r.key === p.key;
+              });
+              return kept || p;
+            }),
+        );
       scanned = legs.length > 0 || hotels.length > 0;
       var parts = [];
       if (first) parts.push("נחיתה: " + (arrival.date || "?") + " " + (arrival.time || ""));
@@ -728,10 +747,12 @@
             currency: $("#tripCurrency").value,
             budgetPerPerson: avgBudget,
             hotel: $("#tripHotel").value.trim(),
-            travelDetails: Object.assign({}, scannedDetails, {
+            travelDetails: Object.assign({}, scannedDetails, hotelMoved(t, $("#tripHotel").value.trim()), {
               prepaidExpenses: prepaidRows.length
                 ? prepaidRows.map(function (row) {
-                    return Object.assign({}, row);
+                    var copy = Object.assign({}, row);
+                    delete copy.key;
+                    return copy;
                   })
                 : scannedDetails.prepaidExpenses || [],
             }),
@@ -762,6 +783,23 @@
         closeModal();
         selectTrip(next.id);
         toast("הטיול והתקציבים האישיים נשמרו");
+        // New dates or a new hotel: the day plan follows (new days get room for places, legs start at the new hotel).
+        var datesChanged = t && (t.start !== next.start || t.end !== next.end),
+          hotelChanged = t && (t.hotel || "") !== (next.hotel || "");
+        if (
+          t &&
+          next.dailySchedule &&
+          next.dailySchedule.length &&
+          (datesChanged || hotelChanged) &&
+          window.TriplySchedule &&
+          window.TriplySchedule.run
+        )
+          window.TriplySchedule.run(
+            next,
+            null,
+            { force: TripModel.dates(next.start, next.end) },
+            datesChanged ? "לוח הימים הותאם לתאריכים החדשים" : "זמני הדרך חושבו מחדש מהמלון החדש",
+          );
       } catch (error) {
         $("#formError").textContent = error.message || "לא ניתן לשמור. בדוק את הפרטים ואת החיבור.";
       } finally {
@@ -771,6 +809,11 @@
     renderPeople();
     showPrepaid();
     renderWizard();
+  }
+  // A different hotel: forget the old one's map point (it is looked up again from the new name).
+  function hotelMoved(t, hotel) {
+    if (!t || (t.hotel || "") === hotel) return {};
+    return { lodgingPoint: undefined, lodgingPoints: undefined };
   }
   window.tripForm = tripWizard;
 })();
